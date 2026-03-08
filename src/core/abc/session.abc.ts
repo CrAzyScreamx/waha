@@ -99,6 +99,7 @@ import {
 } from '../../structures/enums.dto';
 import { EventMessageRequest } from '../../structures/events.dto';
 import {
+  AddParticipantsRequest,
   CreateGroupRequest,
   GroupField,
   GroupParticipant,
@@ -1023,7 +1024,7 @@ export abstract class WhatsappSession {
     throw new NotImplementedByEngineError();
   }
 
-  public addParticipants(id, request: ParticipantsRequest) {
+  public addParticipants(id, request: AddParticipantsRequest) {
     throw new NotImplementedByEngineError();
   }
 

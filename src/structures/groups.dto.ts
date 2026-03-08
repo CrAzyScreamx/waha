@@ -39,6 +39,26 @@ export class ParticipantsRequest {
   participants: Array<Participant>;
 }
 
+export class AddParticipantsRequest extends ParticipantsRequest {
+  @IsOptional()
+  @IsBoolean()
+  @ApiProperty({
+    description:
+      'Automatically send a v4 invite link to participants who cannot be added directly. WebJS only.',
+    required: false,
+    default: false,
+  })
+  autoSendInviteV4?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @ApiProperty({
+    description: 'A message to include with the invite. WebJS only.',
+    required: false,
+  })
+  comment?: string;
+}
+
 export class DescriptionRequest {
   @IsString()
   description: string;
