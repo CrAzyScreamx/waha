@@ -100,7 +100,7 @@ jobs:
             type=raw,value=${{ matrix.tag }}-{{tag}}
 
       - name: Login to GHCR
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -196,6 +196,6 @@ jobs:
           build-args: |
             USE_BROWSER=${{ matrix.browser }}
             WHATSAPP_DEFAULT_ENGINE=${{ matrix.engine }}
-          push: ${{ github.ref_type == 'tag' }}
+          push: ${{ github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
