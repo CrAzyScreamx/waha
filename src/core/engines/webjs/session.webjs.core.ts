@@ -99,6 +99,7 @@ import {
 } from '@waha/structures/enums.dto';
 import { BinaryFile, RemoteFile } from '@waha/structures/files.dto';
 import {
+  AddParticipantsRequest,
   CreateGroupRequest,
   GroupParticipant,
   GroupSortField,
@@ -1375,12 +1376,15 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
   }
 
   @Activity()
-  public async addParticipants(id, request: ParticipantsRequest) {
+  public async addParticipants(id, request: AddParticipantsRequest) {
     const groupChat = (await this.whatsapp.getChatById(id)) as GroupChat;
     const participantIds = request.participants.map(
       (participant) => participant.id,
     );
-    return groupChat.addParticipants(participantIds);
+    return groupChat.addParticipants(participantIds, {
+      autoSendInviteV4: request.autoSendInviteV4 ?? false,
+      comment: request.comment,
+    });
   }
 
   @Activity()

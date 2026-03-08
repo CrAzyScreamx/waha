@@ -29,6 +29,7 @@ import { ProfilePictureRequest } from '@waha/structures/profile.dto';
 import { SessionManager } from '../core/abc/manager.abc';
 import { parseGroupInviteLink, WhatsappSession } from '../core/abc/session.abc';
 import {
+  AddParticipantsRequest,
   CreateGroupRequest,
   DescriptionRequest,
   GroupField,
@@ -348,7 +349,7 @@ export class GroupsController {
   addParticipants(
     @WorkingSessionParam session: WhatsappSession,
     @Param('id') id: string,
-    @Body() request: ParticipantsRequest,
+    @Body() request: AddParticipantsRequest,
   ) {
     return session.addParticipants(id, request);
   }
