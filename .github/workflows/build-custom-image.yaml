@@ -98,8 +98,8 @@ jobs:
           tags: |
             type=raw,value=${{ matrix.tag }}
             type=raw,value=${{ matrix.tag }}-{{tag}}
-            type=raw,value=latest
-            type=raw,value=${{ matrix.tag }}-{{sha}}
+            type=raw,value=latest,enable=${{ matrix.tag == 'latest' }}
+            type=raw,value={{sha}},enable=${{ matrix.tag == 'latest' }}
 
       - name: Login to GHCR
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
