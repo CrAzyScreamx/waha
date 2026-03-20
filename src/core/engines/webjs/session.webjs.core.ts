@@ -366,6 +366,16 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
         this.whatsapp.events.on(
           PAGE_CALL_ERROR_EVENT,
           (event: CallErrorEvent) => {
+            if (this.shouldIgnoreError(event.error)) {
+              this.logger.warn(
+                `Transient error when calling page method: ${String(
+                  event.method,
+                )}, ignoring...`,
+              );
+              this.logger.warn(event.error);
+              return;
+            }
+
             if (event.error instanceof ProtocolError) {
               if (this.shouldIgnoreProtocolError(event.error)) {
                 this.logger.warn(
@@ -452,6 +462,17 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
   private shouldIgnoreProtocolError(error: ProtocolError): boolean {
     const message = error?.message ?? String(error ?? '');
     return message.includes('Network.getResponseBody');
+  }
+
+  /**
+   * Detached frame errors are transient — whatsapp-web.js attempts to re-inject
+   * its scripts into a frame that is navigating away (e.g. after group operations
+   * like addParticipants trigger an internal WA Web reload). The injection will
+   * succeed on the next framenavigated event, so these errors are safe to ignore.
+   */
+  private shouldIgnoreError(error: unknown): boolean {
+    const message = String((error as any)?.message ?? error ?? '');
+    return message.includes('detached Frame');
   }
 
   async unpair() {

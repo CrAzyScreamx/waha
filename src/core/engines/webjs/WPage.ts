@@ -11,6 +11,17 @@ export interface CallErrorEvent {
 export const PAGE_CALL_ERROR_EVENT = 'page.call.error';
 
 /**
+ * Detached frame errors are transient — they occur when whatsapp-web.js tries
+ * to re-inject its scripts into a frame that is in the middle of navigating away.
+ * The injection will succeed on the next framenavigated event, so we swallow
+ * these errors to prevent unhandled rejections from bubbling up to Bootstrap.
+ */
+function isDetachedFrameError(err: unknown): boolean {
+  const message = String((err as any)?.message ?? err ?? '');
+  return message.includes('detached Frame');
+}
+
+/**
  * WPage is a puppeter.Page wrapper that use ALL original methods from Page,
  * but in case if there were any errors in the call (original) -
  * it calls the errorCallback with method name, error and arguments
@@ -34,6 +45,9 @@ export class WPage extends EventEmitter {
       return await this.page.evaluate(fn, ...args);
     } catch (err) {
       this.emit(PAGE_CALL_ERROR_EVENT, { method: 'evaluate', error: err });
+      if (isDetachedFrameError(err)) {
+        return undefined;
+      }
       throw err;
     }
   }
