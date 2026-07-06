@@ -19,8 +19,9 @@ jobs:
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
-          - platform: linux/arm64
-            runner: ubuntu-24.04-arm
+          # arm64 dropped: USE_BROWSER=chrome installs Google Chrome, which
+          # ships amd64-only. Deployment host is amd64. Re-add an arm64 entry
+          # with USE_BROWSER=chromium if arm64 support is ever needed.
 
     steps:
       - name: Checkout
@@ -45,7 +46,7 @@ jobs:
           file: Dockerfile
           platforms: ${{ matrix.platform }}
           build-args: |
-            USE_BROWSER=chromium
+            USE_BROWSER=chrome
             WHATSAPP_DEFAULT_ENGINE=WEBJS
           outputs: type=image,name=ghcr.io/crazyscreamx/waha-custom,push-by-digest=true,name-canonical=true,push=${{ github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' }}
 
