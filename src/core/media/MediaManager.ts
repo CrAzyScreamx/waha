@@ -17,8 +17,8 @@ export class MediaManager implements IMediaManager {
   // https://github.com/IndigoUnited/node-promise-retry
   RETRY_OPTIONS = {
     retries: 5,
-    minTimeout: 100,
-    maxTimeout: 500,
+    minTimeout: 1000,
+    maxTimeout: 3000,
   };
 
   constructor(
@@ -187,7 +187,14 @@ export class MediaManager implements IMediaManager {
     const retryOptions = this.RETRY_OPTIONS;
     try {
       return await promiseRetry((retry: CallableFunction, number: number) => {
-        return fn().catch(retry);
+        return fn().catch((err: any) => {
+          // Some failures are definitive (e.g. media not downloadable): retrying
+          // won't help and may block, so abort the retry loop immediately.
+          if (err?.nonRetriable) {
+            throw err;
+          }
+          return retry(err);
+        });
       }, retryOptions);
     } catch (error) {
       this.log.error(

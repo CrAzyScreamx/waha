@@ -190,11 +190,14 @@ export class SwaggerConfiguratorCore {
     const config = this.app.get(WhatsappConfigService);
     const exclude = lodash.uniq([
       '/api/',
+      '/mcp',
       dashboardConfig.dashboardUri,
       '/health',
       '/ping',
       '/ws',
       '/webhooks/',
+      '/jobs',
+      '/jobs/',
       ...config.getExcludedFullPaths(),
     ]);
 

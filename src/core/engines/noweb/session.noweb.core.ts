@@ -1,5 +1,5 @@
-import { Browsers, WABrowserDescription } from '@adiwajshing/baileys';
 import makeWASocket, {
+  Browsers,
   Chat,
   Contact,
   decryptPollVote,
@@ -19,6 +19,7 @@ import makeWASocket, {
   PresenceData,
   proto,
   SocketConfig,
+  WABrowserDescription,
   WAMessageContent,
   WAMessageKey,
   WAMessageUpdate,
@@ -35,6 +36,10 @@ import {
   LabelAssociationType,
 } from '@adiwajshing/baileys/lib/Types/LabelAssociation';
 import { MessageUserReceiptUpdate } from '@adiwajshing/baileys/lib/Types/Message';
+import type {
+  MediaGenerationOptions,
+  NewsletterFetchedUpdate,
+} from '@adiwajshing/baileys/lib/Types';
 import { ILogger } from '@adiwajshing/baileys/lib/Utils/logger';
 import { isLidUser } from '@adiwajshing/baileys/lib/WABinary/jid-utils';
 import { UnprocessableEntityException } from '@nestjs/common';
@@ -57,22 +62,25 @@ import {
 } from '@waha/core/engines/noweb/noweb.newsletter';
 import { NowebAuthFactoryCore } from '@waha/core/engines/noweb/NowebAuthFactoryCore';
 import { NowebInMemoryStore } from '@waha/core/engines/noweb/store/NowebInMemoryStore';
-import {
-  AvailableInPlusVersion,
-  NotImplementedByEngineError,
-} from '@waha/core/exceptions';
+import { NotImplementedByEngineError } from '@waha/core/exceptions';
 import { toVcardV3 } from '@waha/core/vcard';
 import { createAgentProxy } from '@waha/core/helpers.proxy';
 import type { Agent } from 'https';
 import { IMediaEngineProcessor } from '@waha/core/media/IMediaEngineProcessor';
+import { LottieMediaProcessorWrapper } from '@waha/core/media/LottieMediaProcessorWrapper';
 import { QR } from '@waha/core/QR';
 import { AckToStatus, StatusToAck } from '@waha/core/utils/acks';
 import { pairs } from '@waha/utils/pairs';
 import { ExtractMessageKeysForRead } from '@waha/core/utils/convertors';
 import { parseMessageIdSerialized } from '@waha/core/utils/ids';
 import { isJidNewsletter, toCusFormat, toJID } from '@waha/core/utils/jids';
-import { DistinctAck } from '@waha/core/utils/reactive';
-import { flipObject, splitAt } from '@waha/helpers';
+import { DistinctAck, DistinctMessages } from '@waha/core/utils/reactive';
+import {
+  flipObject,
+  parseBool,
+  sortObjectByValues,
+  splitAt,
+} from '@waha/helpers';
 import { PairingCodeResponse } from '@waha/structures/auth.dto';
 import { CallData } from '@waha/structures/calls.dto';
 import {
@@ -116,6 +124,7 @@ import {
   MessageReplyRequest,
   MessageStarRequest,
   MessageTextRequest,
+  MessageVideoRequest,
   MessageVoiceRequest,
   SendSeenRequest,
   WANumberExistResult,
@@ -135,7 +144,7 @@ import {
   WAHASessionStatus,
   WAMessageAck,
 } from '@waha/structures/enums.dto';
-import { BinaryFile, RemoteFile } from '@waha/structures/files.dto';
+import { BinaryFile, FileType, RemoteFile } from '@waha/structures/files.dto';
 import {
   CreateGroupRequest,
   GroupParticipant,
@@ -161,8 +170,11 @@ import { MeInfo } from '@waha/structures/sessions.dto';
 import {
   BROADCAST_ID,
   DeleteStatusRequest,
+  ImageStatus,
   StatusRequest,
   TextStatus,
+  VideoStatus,
+  VoiceStatus,
 } from '@waha/structures/status.dto';
 import {
   EnginePayload,
@@ -183,18 +195,19 @@ import * as NodeCache from 'node-cache';
 import {
   filter,
   fromEvent,
+  groupBy,
   identity,
   merge,
   mergeAll,
   mergeMap,
   Observable,
   partition,
-  groupBy,
   share,
   tap,
 } from 'rxjs';
 import { debounceTime, map } from 'rxjs/operators';
 
+import { NowebClient } from './NowebClient';
 import { INowebStore } from './store/INowebStore';
 import { NowebPersistentStore } from './store/NowebPersistentStore';
 import { NowebStorageFactoryCore } from './store/NowebStorageFactoryCore';
@@ -203,16 +216,29 @@ import { Agents } from '@waha/core/engines/noweb/types';
 import {
   IsEditedMessage,
   IsHistorySyncNotification,
+  IsSecretEncryptedMessageEdit,
 } from '@waha/core/utils/pwa';
+import {
+  decryptSecretEncryptedMessageEditProto,
+  getOrigSenderJidForMsgSecret,
+  jidToNonAD,
+} from '@waha/core/utils/secretEncryptedMessageEdit';
 import { extractWALocation } from '@waha/core/engines/waproto/locaiton';
 import { extractVCards } from '@waha/core/engines/waproto/vcards';
 import { Activity } from '@waha/core/abc/activity';
+import { WAMimeType } from '@waha/core/media/WAMimeType';
 import {
   WAHA_CLIENT_BROWSER_NAME,
   WAHA_CLIENT_DEVICE_NAME,
 } from '@waha/core/env';
+import { detectMimetype } from '@waha/utils/files';
+import esm from '@waha/vendor/esm';
+import axios from 'axios';
+import axiosRetry from 'axios-retry';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const promiseRetry = require('promise-retry');
+
+axiosRetry(axios, { retries: 3 });
 
 export const BaileysEvents = {
   CONNECTION_UPDATE: 'connection.update',
@@ -897,12 +923,20 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     return true;
   }
 
-  protected setProfilePicture(file: BinaryFile | RemoteFile): Promise<boolean> {
-    throw new AvailableInPlusVersion();
+  @Activity()
+  protected async setProfilePicture(
+    file: BinaryFile | RemoteFile,
+  ): Promise<boolean> {
+    const content: Buffer = await this.fileToBuffer(file);
+    const me = this.getSessionMeInfo();
+    await this.sock.updateProfilePicture(me.id, content);
+    return true;
   }
 
-  protected deleteProfilePicture(): Promise<boolean> {
-    throw new AvailableInPlusVersion();
+  protected async deleteProfilePicture(): Promise<boolean> {
+    const me = this.getSessionMeInfo();
+    await this.sock.removeProfilePicture(me.id);
+    return true;
   }
 
   /**
@@ -1053,32 +1087,209 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     return await this.sock.sendMessage(request.chatId, message, options);
   }
 
-  sendImage(request: MessageImageRequest) {
-    throw new AvailableInPlusVersion();
+  @Activity()
+  async sendImage(request: MessageImageRequest) {
+    const message: any = await this.fileToMessage(
+      request.file,
+      'image',
+      request.caption,
+    );
+    message.mimetype = message.mimetype || WAMimeType.IMAGE;
+    const chatId = toJID(this.ensureSuffix(request.chatId));
+    // Baileys' newsletter media path skips thumbnail and dimension computation.
+    // Pre-compute them so iOS renders the image with the correct aspect ratio.
+    if (isJidNewsletter(chatId)) {
+      try {
+        const thumb = await esm.b.extractImageThumb(message.image, 72);
+        message.jpegThumbnail = thumb.buffer;
+        message.width = thumb.original.width;
+        message.height = thumb.original.height;
+      } catch (err) {
+        this.logger.warn(
+          { error: err },
+          'Failed to generate thumbnail for newsletter image',
+        );
+      }
+    }
+    if (request.mentions?.length) {
+      message.mentions = request.mentions.map((mention) => toJID(mention));
+    }
+    const options = await this.getMessageOptions(request);
+    return this.sock.sendMessage(chatId, message, options);
   }
 
-  sendFile(request: MessageFileRequest) {
-    throw new AvailableInPlusVersion();
+  @Activity()
+  async sendFile(request: MessageFileRequest) {
+    const message: any = await this.fileToMessage(
+      request.file,
+      'document',
+      request.caption,
+    );
+    if (!message.mimetype) {
+      message.mimetype = await detectMimetype(message['document']);
+    }
+    if (request.mentions?.length) {
+      message.mentions = request.mentions.map((mention) => toJID(mention));
+    }
+    const chatId = toJID(this.ensureSuffix(request.chatId));
+    const options = await this.getMessageOptions(request);
+    return this.sock.sendMessage(chatId, message, options);
   }
 
-  sendVoice(request: MessageVoiceRequest) {
-    throw new AvailableInPlusVersion();
+  @Activity()
+  async sendVoice(request: MessageVoiceRequest) {
+    const message: any = await this.fileToMessage(request.file, 'audio');
+    message.mimetype = message.mimetype || WAMimeType.VOICE;
+    if (request.convert) {
+      message['audio'] = await this.mediaConverter.voice(message['audio']);
+      message.mimetype = WAMimeType.VOICE;
+    }
+    const chatId = toJID(this.ensureSuffix(request.chatId));
+    const options = await this.getMessageOptions(request);
+    return this.sock.sendMessage(chatId, message, options);
   }
 
-  sendLinkCustomPreview(
+  @Activity()
+  async sendVideo(request: MessageVideoRequest) {
+    const message: any = await this.fileToMessage(
+      request.file,
+      'video',
+      request.caption,
+    );
+    message.mimetype = message.mimetype || WAMimeType.VIDEO;
+    if (request.convert) {
+      message['video'] = await this.mediaConverter.video(message['video']);
+      message.mimetype = WAMimeType.VIDEO;
+    }
+    if (request.mentions?.length) {
+      message.mentions = request.mentions.map((mention) => toJID(mention));
+    }
+    const duration = await esm.b
+      .getAudioDuration(message['video'])
+      .catch((err) => {
+        this.logger.warn({ error: err }, 'Failed to get video duration');
+        return undefined;
+      });
+    message.seconds = duration;
+    const isGif = request.file?.mimetype === 'image/gif';
+    if (isGif) {
+      message.gifPlayback = true;
+      message.externalShareFullVideoDurationInSeconds = 0;
+    }
+    const chatId = toJID(this.ensureSuffix(request.chatId));
+    const options = await this.getMessageOptions(request);
+    message.ptv = parseBool(request.asNote);
+    return this.sock.sendMessage(chatId, message, options);
+  }
+
+  @Activity()
+  async sendLinkCustomPreview(
     request: MessageLinkCustomPreviewRequest,
   ): Promise<any> {
-    throw new AvailableInPlusVersion();
+    const chatId = toJID(this.ensureSuffix(request.chatId));
+    const options = await this.getMessageOptions(request);
+    const preview = request.preview;
+    const urlInfo = {
+      'matched-text': preview.url,
+      title: preview.title,
+      description: preview.description,
+      jpegThumbnail: null,
+      highQualityThumbnail: null,
+    };
+
+    if (request.preview.image) {
+      const content: Buffer = await this.fileToBuffer(request.preview.image);
+      if (!request.linkPreviewHighQuality) {
+        // generate built-in thumbnail
+        const thumbnail = await esm.b.extractImageThumb(content, 192);
+        urlInfo.jpegThumbnail = thumbnail.buffer;
+      } else {
+        // upload HQ thumbnail
+        const { imageMessage } = await esm.b.prepareWAMessageMedia(
+          { image: content },
+          {
+            upload: this.sock.waUploadToServer,
+            mediaTypeOverride: 'thumbnail-link',
+            options: { signal: AbortSignal.timeout(10_000) },
+          },
+        );
+        urlInfo.jpegThumbnail = imageMessage?.jpegThumbnail
+          ? Buffer.from(imageMessage.jpegThumbnail)
+          : undefined;
+        urlInfo.highQualityThumbnail = imageMessage;
+      }
+    }
+
+    const message = {
+      text: request.text,
+      linkPreview: urlInfo,
+    };
+    return this.sock.sendMessage(chatId, message as any, options);
   }
 
   protected async uploadMedia(
     file: RemoteFile | BinaryFile,
-    type,
+    type: any,
   ): Promise<any> {
-    if (file && ('url' in file || 'data' in file)) {
-      throw new AvailableInPlusVersion('Sending media (image, video, pdf)');
+    if (!file) {
+      return;
     }
-    return;
+    if (!('url' in file || 'data' in file)) {
+      return;
+    }
+    const message: any = await this.fileToMessage(file, type);
+    const options: MediaGenerationOptions = {
+      logger: this.engineLogger,
+      upload: this.sock.waUploadToServer,
+    };
+    const { imageMessage } = await esm.b.prepareWAMessageMedia(
+      message,
+      options,
+    );
+    return imageMessage;
+  }
+
+  get client(): NowebClient {
+    return new NowebClient(this.sock);
+  }
+
+  protected async fileToMessage(
+    file: RemoteFile | BinaryFile,
+    type: any,
+    caption = '',
+  ) {
+    let content: Buffer;
+    if ('url' in file) {
+      content = await this.fetch(file.url);
+    } else if ('data' in file) {
+      content = Buffer.from(file.data, 'base64');
+    } else {
+      throw new UnprocessableEntityException(
+        'Either "file.url" or "file.data" must be specified.',
+      );
+    }
+
+    return {
+      [type]: content,
+      mimetype: file.mimetype,
+      caption: caption,
+      fileName: file.filename,
+      ptt: type === 'audio',
+    };
+  }
+
+  private async fileToBuffer(file: FileType): Promise<Buffer> {
+    let content: Buffer;
+    if ('data' in file) {
+      content = Buffer.from(file.data, 'base64');
+    } else if ('url' in file) {
+      content = await this.fetch(file.url);
+    } else {
+      throw new UnprocessableEntityException(
+        'Either file.url or file.data must be specified.',
+      );
+    }
+    return content;
   }
 
   @Activity()
@@ -1096,8 +1307,24 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     );
   }
 
-  sendList(request: SendListRequest): Promise<any> {
-    throw new AvailableInPlusVersion();
+  @Activity()
+  async sendList(request: SendListRequest): Promise<any> {
+    const jid = toJID(this.ensureSuffix(request.chatId));
+    if (!isLidUser(jid) && !isPnUser(jid)) {
+      throw new UnprocessableEntityException(
+        `List message can only be sent to a direct message chat.`,
+      );
+    }
+    const message = request.message;
+    const msg = {
+      text: message.description || '',
+      title: message.title,
+      buttonText: message.button,
+      footer: message.footer,
+      sections: message.sections,
+    } as any;
+    const options = await this.getMessageOptions(request);
+    return await this.sock.sendMessage(jid, msg, options);
   }
 
   @Activity()
@@ -1618,6 +1845,22 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
    * Group methods
    */
   @Activity()
+  protected async setGroupPicture(
+    id: string,
+    file: BinaryFile | RemoteFile,
+  ): Promise<boolean> {
+    const content: Buffer = await this.fileToBuffer(file);
+    await this.sock.updateProfilePicture(id, content);
+    return true;
+  }
+
+  @Activity()
+  protected async deleteGroupPicture(id: string): Promise<boolean> {
+    await this.sock.removeProfilePicture(id);
+    return true;
+  }
+
+  @Activity()
   public createGroup(request: CreateGroupRequest) {
     const participants = request.participants.map(getId);
     return this.sock.groupCreate(request.name, participants);
@@ -1888,6 +2131,84 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     );
   }
 
+  @Activity()
+  public async sendImageStatus(status: ImageStatus) {
+    const message: any = await this.fileToMessage(
+      status.file,
+      'image',
+      status.caption,
+    );
+    message.mimetype = message.mimetype || WAMimeType.IMAGE;
+    const jids = await this.prepareJidsForStatus(status.contacts);
+    if (!status.id) {
+      this.upsertMeInJIDs(jids);
+    }
+    const messageId = this.prepareMessageIdForStatus(status);
+    const options = {
+      messageId: messageId,
+    };
+    return await this.sendStatusMessage(
+      message,
+      options,
+      jids,
+      status.contacts?.length,
+    );
+  }
+
+  @Activity()
+  public async sendVoiceStatus(status: VoiceStatus) {
+    const message: any = await this.fileToMessage(status.file, 'audio');
+    message.mimetype = message.mimetype || WAMimeType.VOICE;
+    if (status.convert) {
+      message['audio'] = await this.mediaConverter.voice(message['audio']);
+      message.mimetype = WAMimeType.VOICE;
+    }
+    const jids = await this.prepareJidsForStatus(status.contacts);
+    if (!status.id) {
+      this.upsertMeInJIDs(jids);
+    }
+    const messageId = this.prepareMessageIdForStatus(status);
+    const options = {
+      backgroundColor: status.backgroundColor,
+      messageId: messageId,
+    };
+    return await this.sendStatusMessage(
+      message,
+      options,
+      jids,
+      status.contacts?.length,
+    );
+  }
+
+  @Activity()
+  public async sendVideoStatus(status: VideoStatus) {
+    const message: any = await this.fileToMessage(
+      status.file,
+      'video',
+      status.caption,
+    );
+    message.mimetype = message.mimetype || WAMimeType.VIDEO;
+    if (status.convert) {
+      message['video'] = await this.mediaConverter.video(message['video']);
+      message.mimetype = WAMimeType.VIDEO;
+    }
+    const jids = await this.prepareJidsForStatus(status.contacts);
+    if (!status.id) {
+      this.upsertMeInJIDs(jids);
+    }
+    const messageId = this.prepareMessageIdForStatus(status);
+    const options = {
+      statusJidList: jids,
+      messageId: messageId,
+    };
+    return await this.sendStatusMessage(
+      message,
+      options,
+      jids,
+      status.contacts?.length,
+    );
+  }
+
   protected prepareMessageIdForStatus(status: StatusRequest) {
     if (status.id) {
       this.saveSentMessageId(status.id);
@@ -1947,23 +2268,74 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
   /**
    * Channels methods
    */
-  public searchChannelsByView(
+  @Activity()
+  public async searchChannelsByView(
     query: ChannelSearchByView,
   ): Promise<ChannelListResult> {
-    throw new AvailableInPlusVersion();
+    const response = await this.client.searchChannelsByView(query);
+    const channels: Channel[] = response.newsletters.map(
+      this.toChannel.bind(this),
+    );
+    return {
+      page: response.page,
+      channels: channels,
+    };
   }
 
-  public searchChannelsByText(
+  @Activity()
+  public async searchChannelsByText(
     query: ChannelSearchByText,
   ): Promise<ChannelListResult> {
-    throw new AvailableInPlusVersion();
+    const response = await this.client.searchChannelsByText(query);
+    const channels: Channel[] = response.newsletters.map(
+      this.toChannel.bind(this),
+    );
+    return {
+      page: response.page,
+      channels: channels,
+    };
   }
 
+  @Activity()
   public async previewChannelMessages(
     inviteCode: string,
     query: PreviewChannelMessages,
   ): Promise<ChannelMessage[]> {
-    throw new AvailableInPlusVersion();
+    const downloadMedia = query.downloadMedia;
+    const updates = await this.sock.newsletterFetchPreviewMessages(
+      'invite',
+      inviteCode,
+      query.limit,
+      null,
+    );
+    const promises = [];
+    for (const update of updates) {
+      promises.push(
+        this.NewsletterFetchedUpdateToChannelMessage(update, downloadMedia),
+      );
+    }
+    let result = await Promise.all(promises);
+    result = result.filter(Boolean);
+    return result;
+  }
+
+  private async NewsletterFetchedUpdateToChannelMessage(
+    update: NewsletterFetchedUpdate,
+    downloadMedia: boolean,
+  ): Promise<ChannelMessage> {
+    let reactions: any = Object.fromEntries(
+      update.reactions.map(({ code, count }) => [code, count]),
+    );
+    reactions = sortObjectByValues(reactions) || {};
+    const message = await this.processIncomingMessage(
+      update.message,
+      downloadMedia,
+    );
+    return {
+      message: message,
+      reactions: reactions,
+      viewCount: update.views,
+    };
   }
 
   protected toChannel(newsletter: NOWEBNewsletterMetadata): Channel {
@@ -2009,7 +2381,23 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
       request.name,
       request.description,
     );
-    return this.toChannel(toNewsletterMetadata(newsletter));
+    const channel = this.toChannel(toNewsletterMetadata(newsletter));
+
+    if (request.picture) {
+      let file = request.picture;
+      let picture: any;
+      // @ts-ignore
+      if (file.url) {
+        file = file as RemoteFile;
+        picture = await esm.b.getStream({ url: file.url });
+        // @ts-ignore
+      } else if (file.data) {
+        file = file as BinaryFile;
+        picture = Buffer.from(file.data, 'base64');
+      }
+      await this.sock.newsletterUpdatePicture(channel.id, picture);
+    }
+    return channel;
   }
 
   public async channelsGetChannel(id: string) {
@@ -2078,10 +2466,14 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     );
     messagesFromMe$ = messagesFromMe$.pipe(
       mergeMap((msg) => this.processIncomingMessage(msg, true)),
+      filter(Boolean),
+      DistinctMessages(),
       share(), // share it so we don't process twice in message.any
     );
     messagesFromOthers$ = messagesFromOthers$.pipe(
       mergeMap((msg) => this.processIncomingMessage(msg, true)),
+      filter(Boolean),
+      DistinctMessages(),
       share(), // share it so we don't process twice in message.any
     );
     const messagesFromAll$ = merge(messagesFromMe$, messagesFromOthers$);
@@ -2111,14 +2503,25 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
 
     // Handle edited messages
     const messagesEdited$ = messagesUpsert$.pipe(
-      filter((message) => IsEditedMessage(message.message)),
+      filter(
+        (message) =>
+          IsEditedMessage(message.message) ||
+          IsSecretEncryptedMessageEdit(message.message),
+      ),
       mergeMap(async (message): Promise<WAMessageEditedBody> => {
         const waMessage = this.toWAMessage(message);
-        // Extract the body from editedMessage using extractBody function
-        const content = normalizeMessageContent(message.message);
-        const body = extractBody(content.protocolMessage.editedMessage) || '';
-        // Extract the original message ID from protocolMessage.key
-        const editedMessageId = content.protocolMessage.key?.id;
+        let body = '';
+        let editedMessageId: string | undefined;
+        if (IsEditedMessage(message.message)) {
+          const content = normalizeMessageContent(message.message);
+          body = extractBody(content.protocolMessage.editedMessage) || '';
+          editedMessageId = content.protocolMessage.key?.id;
+        } else if (IsSecretEncryptedMessageEdit(message.message)) {
+          const sem = message.message.secretEncryptedMessage;
+          editedMessageId = sem.targetMessageKey?.id;
+          body =
+            (await this.tryDecryptNOWEBSecretMessageEdit(message, sem)) || '';
+        }
         return {
           ...waMessage,
           body: body,
@@ -2420,13 +2823,16 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
   shouldProcessIncomingMessage(message): boolean {
     // if there is no text or media message
     if (!message) return;
-    if (!message.message) return;
+    // View-once (self-destructing) messages arrive with key.isViewOnce=true but
+    // no message content (burned by sender). Allow them through so a webhook
+    // is still fired with key/timestamp metadata.
+    if (!message.message && !message.key?.isViewOnce) return;
     // Ignore reactions, we have dedicated handler for that
-    if (message.message.reactionMessage) return;
+    if (message.message?.reactionMessage) return;
     // Ignore poll votes, we have dedicated handler for that
-    if (message.message.pollUpdateMessage) return;
+    if (message.message?.pollUpdateMessage) return;
     // Ignore calls, we have dedicated handler for that
-    if (message.message.call?.callKey) return;
+    if (message.message?.call?.callKey) return;
     // Ignore revoke, we have a dedicated event for that
     if (
       message.message?.protocolMessage?.type ===
@@ -2435,6 +2841,8 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
       return;
     // Ignore edit, we have a dedicated event for that
     if (IsEditedMessage(message.message)) return;
+    // Ignore secret-encrypted message edits (mobile app format), dedicated handler routes them
+    if (IsSecretEncryptedMessageEdit(message.message)) return;
 
     // Ignore history sync notifications
     if (IsHistorySyncNotification(message.message)) return;
@@ -2465,6 +2873,99 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     return true;
   }
 
+  protected async tryDecryptNOWEBSecretMessageEdit(
+    editMessage: proto.IWebMessageInfo,
+    sem: proto.Message.ISecretEncryptedMessage,
+  ): Promise<string> {
+    const targetKey = sem.targetMessageKey;
+    const origMsgId = targetKey?.id;
+    if (!origMsgId) {
+      return '';
+    }
+    const jidsToTry = [targetKey.remoteJid, editMessage.key?.remoteJid].filter(
+      Boolean,
+    );
+    let stored: proto.IWebMessageInfo | undefined;
+    for (const jid of jidsToTry) {
+      stored = await this.store?.loadMessage(jid, origMsgId);
+      if (stored) {
+        break;
+      }
+    }
+    if (!stored) {
+      this.logger.debug(
+        { origMsgId: origMsgId },
+        'NOWEB message edit decrypt: original message not found in store',
+      );
+      return '';
+    }
+    const secretBytes =
+      normalizeMessageContent(stored.message)?.messageContextInfo
+        ?.messageSecret ?? stored.message?.messageContextInfo?.messageSecret;
+    if (!secretBytes || secretBytes.length !== 32) {
+      this.logger.debug(
+        { origMsgId: origMsgId },
+        'NOWEB message edit decrypt: missing messageSecret on original',
+      );
+      return '';
+    }
+    const origSecret = Buffer.from(secretBytes);
+    const encPayload = sem.encPayload ? Buffer.from(sem.encPayload) : null;
+    const encIv = sem.encIv ? Buffer.from(sem.encIv) : null;
+    if (!encPayload || !encIv) {
+      return '';
+    }
+    const editInfo = {
+      Chat: editMessage.key?.remoteJid,
+      Sender:
+        editMessage.key?.participant ||
+        (editMessage.key?.fromMe ? undefined : editMessage.key?.remoteJid),
+    };
+    const modificationSenderJid = jidToNonAD(editInfo.Sender || '');
+    const primaryOrig = getOrigSenderJidForMsgSecret(editInfo, {
+      fromMe: targetKey.fromMe,
+      remoteJID: targetKey.remoteJid,
+      participant: targetKey.participant,
+    });
+    const candidates: string[] = [primaryOrig];
+    const remoteNonAD = targetKey.remoteJid
+      ? jidToNonAD(targetKey.remoteJid)
+      : '';
+    if (remoteNonAD && !candidates.includes(remoteNonAD)) {
+      candidates.push(remoteNonAD);
+    }
+    const participantNonAD = targetKey.participant
+      ? jidToNonAD(targetKey.participant)
+      : '';
+    if (participantNonAD && !candidates.includes(participantNonAD)) {
+      candidates.push(participantNonAD);
+    }
+    let lastErr: unknown;
+    for (const origSenderJid of candidates) {
+      try {
+        const decoded = decryptSecretEncryptedMessageEditProto({
+          encPayload: encPayload,
+          encIv: encIv,
+          origMsgId: origMsgId,
+          origSenderJid: origSenderJid,
+          modificationSenderJid: modificationSenderJid,
+          origMsgSecret: origSecret,
+        });
+        const text = extractBody(decoded) || '';
+        if (text) {
+          return text;
+        }
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    this.logger.debug(
+      { err: lastErr, origMsgId: origMsgId, candidates: candidates },
+      'NOWEB message edit decrypt: AES-GCM or protobuf decode failed',
+    );
+    return '';
+  }
+
   protected async processIncomingMessage(
     message,
     downloadMedia: boolean,
@@ -2479,9 +2980,24 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
       return null;
     }
     // Media
-    if (downloadMedia) {
-      const media = await this.downloadMediaSafe(message);
-      wamessage.media = media;
+    if (downloadMedia && wamessage.hasMedia) {
+      wamessage.media = await this.downloadMediaSafe(message);
+    }
+
+    if (downloadMedia && wamessage.replyTo?.hasMedia) {
+      const mediaContent = extractMediaContent(wamessage.replyTo._data);
+      const m = {
+        message: wamessage.replyTo._data,
+        key: {
+          id:
+            wamessage.replyTo.id ||
+            mediaContent.fileSha256 ||
+            mediaContent.fileEncSha256 ||
+            mediaContent.mediaKeyTimestamp,
+          remoteJid: message.key.remoteJid,
+        },
+      };
+      wamessage.replyTo.media = await this.downloadMediaSafe(m);
     }
     return wamessage;
   }
@@ -2530,6 +3046,7 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
   }
 
   protected extractReplyTo(message): ReplyToMessage | null {
+    if (!message) return null;
     const msgType = getContentType(message);
     const contextInfo = message[msgType]?.contextInfo;
     if (!contextInfo) {
@@ -2540,10 +3057,15 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
       return null;
     }
     const body = extractBody(quotedMessage);
+    const mediaContent = extractMediaContent(quotedMessage);
     return {
       id: contextInfo.stanzaId,
       participant: toCusFormat(contextInfo.participant),
       body: body,
+      // Media
+      hasMedia: Boolean(mediaContent),
+      media: null,
+      // Data
       _data: quotedMessage,
     };
   }
@@ -2741,11 +3263,16 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
   }
 
   protected async downloadMedia(message): Promise<WAMedia | null> {
-    const processor = new NOWEBEngineMediaProcessor(this, this.loggerBuilder);
+    let processor: IMediaEngineProcessor<any> = new NOWEBEngineMediaProcessor(
+      this,
+      this.loggerBuilder,
+    );
+    processor = new LottieMediaProcessorWrapper(processor, this.logger);
     return this.mediaManager.processMedia(processor, message, this.name);
   }
 
   protected async getMessageOptions(request: {
+    id?: string;
     chatId: string;
     reply_to?: string;
   }) {
@@ -2757,7 +3284,8 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
       quoted = await this.store.loadMessage(jid, key.id);
     }
     const chat = await this.store.getChat(jid);
-    const messageId = this.generateMessageID();
+    const messageId = request.id ? request.id : this.generateMessageID();
+    this.saveSentMessageId(messageId);
     return {
       quoted: quoted,
       ephemeralExpiration: chat?.ephemeralExpiration,
@@ -2844,9 +3372,12 @@ export class NOWEBEngineMediaProcessor implements IMediaEngineProcessor<any> {
       content.url = null;
     }
 
-    return (await downloadMediaMessage(
+    // Use 'stream' mode instead of 'buffer' to fix 0-byte audio files
+    // 'buffer' mode silently returns empty buffer for audio/voice messages
+    // See: https://github.com/devlikeapro/waha/issues/1996
+    const stream = await downloadMediaMessage(
       message,
-      'buffer',
+      'stream',
       {},
       {
         logger: this.logger,
@@ -2855,7 +3386,12 @@ export class NOWEBEngineMediaProcessor implements IMediaEngineProcessor<any> {
     ).finally(() => {
       // Set url back in case we removed it
       content.url = url;
-    })) as Buffer;
+    });
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
   }
 
   getFilename(message: any): string | null {

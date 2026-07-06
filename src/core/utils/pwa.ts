@@ -3,6 +3,7 @@
  */
 
 import { normalizeMessageContent, proto } from '@adiwajshing/baileys';
+import esm from '@waha/vendor/esm';
 
 export function IsEditedMessage(message: proto.IMessage): boolean {
   message = normalizeMessageContent(message);
@@ -21,6 +22,19 @@ export function IsEditedMessage(message: proto.IMessage): boolean {
   return true;
 }
 
+export function IsSecretEncryptedMessageEdit(
+  message: proto.IMessage | null | undefined,
+): boolean {
+  const sem = message?.secretEncryptedMessage;
+  if (!sem) {
+    return false;
+  }
+  return (
+    sem.secretEncType ===
+    proto.Message.SecretEncryptedMessage.SecretEncType.MESSAGE_EDIT
+  );
+}
+
 export function IsHistorySyncNotification(message: proto.IMessage): boolean {
   message = normalizeMessageContent(message);
   if (!message) {
@@ -36,4 +50,12 @@ export function IsHistorySyncNotification(message: proto.IMessage): boolean {
     return false;
   }
   return true;
+}
+
+export function getContextInfo(
+  protoMessage: proto.Message | null,
+): proto.IContextInfo | null {
+  const type = esm.b.getContentType(protoMessage);
+  const message = protoMessage[type] as any;
+  return message?.contextInfo;
 }
