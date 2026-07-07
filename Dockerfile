@@ -168,20 +168,31 @@ RUN if [ "$USE_BROWSER" = "chromium" ] || [ "$USE_BROWSER" = "chrome" ]; then \
     fi
 
 # Install Chromium
+# ponytail: pinned to Debian Chromium 149 from snapshot.debian.org. On the
+# deployment host (Ubuntu kernel 6.17) this is the ONLY proven-good browser:
+# Google Chrome 140 crashes at launch, Chrome 150 detaches during navigation,
+# and Debian Chromium 150 SIGTRAPs. 149 works. Debian's live repo only serves
+# 150 now, so 149 is fetched from snapshot by sha1. Upgrade path: when the
+# kernel/browser situation moves on, revert to `apt-get install -y chromium`
+# for the current build. Find newer snapshot sha1s via
+# https://snapshot.debian.org/package/chromium/
+ARG CHROMIUM_VERSION="149.0.7827.196-1~deb12u1"
+ARG CHROMIUM_DEB_SHA1="b7b0674e68b94af0158bfa8c305a46fc07f6f7c5"
+ARG CHROMIUM_COMMON_DEB_SHA1="098ec4a8fe2e76c66f942ad2e2133f75fbd2a13d"
 RUN if [ "$USE_BROWSER" = "chromium" ]; then \
-        apt-get update  \
+        wget --no-verbose -O /tmp/chromium-common.deb https://snapshot.debian.org/file/${CHROMIUM_COMMON_DEB_SHA1} \
+        && wget --no-verbose -O /tmp/chromium.deb https://snapshot.debian.org/file/${CHROMIUM_DEB_SHA1} \
         && apt-get update \
-        && apt-get install -y chromium \
-          --no-install-recommends \
+        && apt-get install -y /tmp/chromium-common.deb /tmp/chromium.deb \
+        && rm /tmp/chromium-common.deb /tmp/chromium.deb \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
 # Install Chrome
-# Available versions:
-# https://www.ubuntuupdates.org/package/google_chrome/stable/main/base/google-chrome-stable
-# ponytail: pinned Chrome; stale pins crash on newer host kernels (140 SIGTRAPs
-# on kernel 6.17). Bump to current stable when it breaks, or switch to Google's
-# apt repo for always-latest. Check https://www.ubuntuupdates.org/package/google_chrome/stable/main/base/google-chrome-stable
+# NOTE: Google Chrome does NOT work on the kernel-6.17 deployment host (140
+# crashes at launch, 150 detaches during navigation). Use USE_BROWSER=chromium
+# (pinned 149 above) there. This path is kept for hosts where Chrome is fine.
+# Available versions: https://www.ubuntuupdates.org/package/google_chrome/stable/main/base/google-chrome-stable
 ARG CHROME_VERSION="150.0.7871.46-1"
 ARG OPUSTAGS_VERSION="1.10.1"
 RUN if [ "$USE_BROWSER" = "chrome" ]; then \
