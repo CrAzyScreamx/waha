@@ -34,17 +34,17 @@ import {
   getDestination,
 } from '@waha/core/engines/noweb/session.noweb.core';
 import { extractMediaContent } from '@waha/core/engines/noweb/utils';
-import {
-  AvailableInPlusVersion,
-  NotImplementedByEngineError,
-} from '@waha/core/exceptions';
+import { NotImplementedByEngineError } from '@waha/core/exceptions';
 import { IMediaEngineProcessor } from '@waha/core/media/IMediaEngineProcessor';
+import { LottieMediaProcessorWrapper } from '@waha/core/media/LottieMediaProcessorWrapper';
 import { QR } from '@waha/core/QR';
 import { ExtractMessageKeysForRead } from '@waha/core/utils/convertors';
 import { parseMessageIdSerialized } from '@waha/core/utils/ids';
 import {
   isJidBroadcast,
   isJidGroup,
+  isJidNewsletter,
+  normalizeJid,
   toCusFormat,
   toJID,
 } from '@waha/core/utils/jids';
@@ -76,6 +76,7 @@ import {
   ChatRequest,
   CheckNumberStatusQuery,
   EditMessageRequest,
+  MessageButtonReply,
   MessageContactVcardRequest,
   MessageFileRequest,
   MessageForwardRequest,
@@ -87,6 +88,7 @@ import {
   MessageReactionRequest,
   MessageReplyRequest,
   MessageTextRequest,
+  MessageVideoRequest,
   MessageVoiceRequest,
   SendSeenRequest,
   WANumberExistResult,
@@ -134,7 +136,10 @@ import {
 import {
   BROADCAST_ID,
   DeleteStatusRequest,
+  ImageStatus,
   TextStatus,
+  VideoStatus,
+  VoiceStatus,
 } from '@waha/structures/status.dto';
 import {
   EnginePayload,
@@ -164,7 +169,7 @@ import { promisify } from 'util';
 import * as gows from './types';
 import { MessageStatus } from './types';
 import { isFromFullSync } from '@waha/core/engines/gows/appstate';
-import { toVcardV3 } from '@waha/core/vcard';
+import { parseVCardV3, toVcardV3 } from '@waha/core/vcard';
 import { AckToStatus } from '@waha/core/utils/acks';
 import { ParseEventResponseType } from '@waha/core/utils/events';
 import { DistinctAck, DistinctMessages } from '@waha/core/utils/reactive';
@@ -190,9 +195,16 @@ import { extractWALocation } from '@waha/core/engines/waproto/locaiton';
 import { extractVCards } from '@waha/core/engines/waproto/vcards';
 import { Activity } from '@waha/core/abc/activity';
 import { TmpDir } from '@waha/utils/tmpdir';
+import { detectMimetype } from '@waha/utils/files';
+import { WAMimeType } from '@waha/core/media/WAMimeType';
+import { sortObjectByValues } from '@waha/helpers';
+import axios from 'axios';
+import axiosRetry from 'axios-retry';
 import * as path from 'path';
 import MessageServiceClient = messages.MessageServiceClient;
 import * as fsp from 'fs/promises';
+
+axiosRetry(axios, { retries: 3 });
 
 function getGowsStorageConfig(
   sessionConfig?: SessionConfig,
@@ -313,7 +325,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
       grpc.credentials.createInsecure(),
     );
 
-    promisify(this.client.StartSession)(request).catch((err) => {
+    await promisify(this.client.StartSession)(request).catch((err) => {
       this.logger.error('Failed to start the client');
       this.logger.error(err, err.stack);
       this.status = WAHASessionStatus.FAILED;
@@ -784,7 +796,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
 
   @Activity()
   async fetchContactProfilePicture(id: string): Promise<string> {
-    const jid = toJID(this.ensureSuffix(id));
+    const jid = normalizeJid(toJID(this.ensureSuffix(id)));
     const request = new messages.ProfilePictureRequest({
       jid: jid,
       session: this.session,
@@ -897,12 +909,46 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     return true;
   }
 
-  protected setProfilePicture(file: BinaryFile | RemoteFile): Promise<boolean> {
-    throw new AvailableInPlusVersion();
+  private async fileToMedia(
+    file: RemoteFile | BinaryFile,
+  ): Promise<messages.Media> {
+    let content: Buffer;
+    if ('url' in file) {
+      // fetch file
+      content = await this.fetch(file.url);
+    } else {
+      // base64 to bytes
+      content = Buffer.from(file.data, 'base64');
+    }
+
+    return new messages.Media({
+      content: content,
+      mimetype: file.mimetype,
+      filename: file.filename,
+    });
   }
 
-  protected deleteProfilePicture(): Promise<boolean> {
-    throw new AvailableInPlusVersion();
+  @Activity()
+  protected async setProfilePicture(
+    file: BinaryFile | RemoteFile,
+  ): Promise<boolean> {
+    const media = await this.fileToMedia(file);
+    const request = new messages.SetProfilePictureRequest({
+      session: this.session,
+      picture: media.content,
+    });
+    const response = await promisify(this.client.SetProfilePicture)(request);
+    response.toObject();
+    return true;
+  }
+
+  protected async deleteProfilePicture(): Promise<boolean> {
+    const request = new messages.SetProfilePictureRequest({
+      session: this.session,
+    });
+    const response = await promisify(this.client.SetProfilePicture)(request);
+    response.toObject();
+    return true;
   }
 
   /**
@@ -920,7 +966,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
   async rejectCall(from: string, id: string): Promise<void> {
     const request = new messages.RejectCallRequest({
       session: this.session,
-      from: toJID(this.ensureSuffix(from)),
+      from: normalizeJid(toJID(this.ensureSuffix(from))),
       id: id,
     });
     await promisify(this.client.RejectCall)(request);
@@ -928,15 +974,18 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
 
   @Activity()
   async sendText(request: MessageTextRequest) {
-    const jid = toJID(this.ensureSuffix(request.chatId));
+    const jid = normalizeJid(toJID(this.ensureSuffix(request.chatId)));
     const message = new messages.MessageRequest({
+      id: request.id,
       jid: jid,
       text: request.text,
       session: this.session,
       linkPreview: request.linkPreview ?? true,
       linkPreviewHighQuality: request.linkPreviewHighQuality,
       replyTo: getMessageIdFromSerialized(request.reply_to),
-      mentions: request.mentions?.map((mention) => toJID(mention)),
+      mentions: request.mentions?.map((mention) =>
+        normalizeJid(toJID(mention)),
+      ),
     });
     const response = await promisify(this.client.SendMessage)(message);
     const data = response.toObject();
@@ -949,7 +998,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     messageId: string,
     request: EditMessageRequest,
   ) {
-    const jid = toJID(this.ensureSuffix(chatId));
+    const jid = normalizeJid(toJID(this.ensureSuffix(chatId)));
     const key = parseMessageIdSerialized(messageId, true);
     const message = new messages.EditMessageRequest({
       session: this.session,
@@ -966,9 +1015,14 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
 
   @Activity()
   async sendContactVCard(request: MessageContactVcardRequest) {
-    const jid = toJID(this.ensureSuffix(request.chatId));
-    const contacts = request.contacts.map((el) => ({ vcard: toVcardV3(el) }));
+    const jid = normalizeJid(toJID(this.ensureSuffix(request.chatId)));
+    const contacts = request.contacts.map((el) => ({
+      displayName:
+        (el as any).fullName || parseVCardV3(el.vcard || '').fullName,
+      vcard: toVcardV3(el),
+    }));
     const message = new messages.MessageRequest({
+      id: request.id,
       jid: jid,
       session: this.session,
       replyTo: getMessageIdFromSerialized(request.reply_to),
@@ -981,8 +1035,9 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
 
   @Activity()
   async sendPoll(request: MessagePollRequest) {
-    const jid = toJID(request.chatId);
+    const jid = normalizeJid(toJID(request.chatId));
     const message = new messages.MessageRequest({
+      id: request.id,
       jid: jid,
       session: this.session,
       replyTo: getMessageIdFromSerialized(request.reply_to),
@@ -997,17 +1052,58 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     return this.messageResponse(jid, data);
   }
 
-  sendPollVote(request: MessagePollVoteRequest) {
-    throw new AvailableInPlusVersion('Poll voting');
+  @Activity()
+  async sendPollVote(request: MessagePollVoteRequest) {
+    const jid = normalizeJid(toJID(this.ensureSuffix(request.chatId)));
+    const key = parseMessageIdSerialized(request.pollMessageId, true);
+    const pollVote = new messages.PollVoteMessage({
+      pollMessageId: key.id,
+      options: request.votes,
+    });
+    if (request.pollServerId != null) {
+      // protobuf expects int64 number
+      pollVote.pollServerId = request.pollServerId;
+    }
+    const message = new messages.MessageRequest({
+      jid: jid,
+      session: this.session,
+      pollVote: pollVote,
+    });
+    const response = await promisify(this.client.SendMessage)(message);
+    const data = response.toObject();
+    return this.messageResponse(jid, data);
   }
 
-  sendList(request: SendListRequest): Promise<any> {
-    throw new AvailableInPlusVersion();
+  @Activity()
+  async sendList(request: SendListRequest): Promise<any> {
+    const jid = normalizeJid(toJID(this.ensureSuffix(request.chatId)));
+    if (isJidGroup(jid) || isJidBroadcast(jid) || isJidNewsletter(jid)) {
+      throw new UnprocessableEntityException(
+        `List message can only be sent to a direct message chat.`,
+      );
+    }
+    const m = request.message;
+    const list = messages.ListMessage.fromObject({
+      title: m.title,
+      description: m.description,
+      footer: m.footer,
+      button: m.button,
+      sections: m.sections,
+    });
+    const message = new messages.MessageRequest({
+      jid: jid,
+      session: this.session,
+      replyTo: getMessageIdFromSerialized(request.reply_to),
+      list: list,
+    });
+    const response = await promisify(this.client.SendMessage)(message);
+    const data = response.toObject();
+    return this.messageResponse(jid, data);
   }
 
   @Activity()
   public async deleteMessage(chatId: string, messageId: string) {
-    const jid = toJID(this.ensureSuffix(chatId));
+    const jid = normalizeJid(toJID(this.ensureSuffix(chatId)));
     const key = parseMessageIdSerialized(messageId);
     const message = new messages.RevokeMessageRequest({
       session: this.session,
@@ -1024,7 +1120,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     if (!contacts || contacts.length == 0) {
       return [];
     }
-    return contacts.map(toJID);
+    return contacts.map((c) => normalizeJid(toJID(c)));
   }
 
   @Activity()
@@ -1100,8 +1196,9 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
 
   @Activity()
   async sendLocation(request: MessageLocationRequest) {
-    const jid = toJID(this.ensureSuffix(request.chatId));
+    const jid = normalizeJid(toJID(this.ensureSuffix(request.chatId)));
     const message = new messages.MessageRequest({
+      id: request.id,
       jid: jid,
       session: this.session,
       replyTo: getMessageIdFromSerialized(request.reply_to),
@@ -1120,22 +1217,209 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     throw new NotImplementedByEngineError();
   }
 
-  sendImage(request: MessageImageRequest) {
-    throw new AvailableInPlusVersion();
+  private async sendMedia(type: messages.MediaType, request: any) {
+    const jid = normalizeJid(toJID(this.ensureSuffix(request.chatId)));
+    const media = await this.fileToMedia(request.file);
+    media.type = type;
+    if (type === messages.MediaType.IMAGE) {
+      media.mimetype = media.mimetype || WAMimeType.IMAGE;
+    } else if (type === messages.MediaType.AUDIO) {
+      media.mimetype = media.mimetype || WAMimeType.VOICE;
+    } else if (
+      type === messages.MediaType.VIDEO ||
+      type === messages.MediaType.PTV
+    ) {
+      media.mimetype = media.mimetype || WAMimeType.VIDEO;
+    } else if (type === messages.MediaType.DOCUMENT) {
+      if (!media.mimetype) {
+        media.mimetype = await detectMimetype(media.content as Buffer);
+      }
+    }
+
+    if (request.convert) {
+      switch (type) {
+        case messages.MediaType.AUDIO:
+          media.content = await this.mediaConverter.voice(
+            media.content as Buffer,
+          );
+          media.mimetype = WAMimeType.VOICE;
+          break;
+        case messages.MediaType.VIDEO:
+          media.content = await this.mediaConverter.video(
+            media.content as Buffer,
+          );
+          media.mimetype = WAMimeType.VIDEO;
+          break;
+        case messages.MediaType.PTV:
+          media.content = await this.mediaConverter.video(
+            media.content as Buffer,
+          );
+          media.mimetype = WAMimeType.VIDEO;
+          break;
+        default:
+          this.logger.warn(`No conversion for ${type}`);
+          break;
+      }
+    }
+
+    // Only for Voice Status
+    let backgroundColor: messages.OptionalString | null = null;
+    if (request.backgroundColor) {
+      backgroundColor = new messages.OptionalString({
+        value: request.backgroundColor,
+      });
+    }
+    const participants = await this.prepareJidsForStatus(request.contacts);
+    const message = new messages.MessageRequest({
+      id: request.id,
+      jid: jid,
+      text: request.caption,
+      session: this.session,
+      media: media,
+      backgroundColor: backgroundColor,
+      mentions: request.mentions?.map((mention) =>
+        normalizeJid(toJID(mention)),
+      ),
+      participants: participants,
+    });
+
+    if (media.type == messages.MediaType.AUDIO) {
+      const logger: any = this.loggerBuilder.child({});
+      const buffer = Buffer.from(media.content);
+      const waveform = await esm.b.getAudioWaveform(buffer, logger);
+      const duration = await esm.b.getAudioDuration(buffer);
+      media.audio = new messages.AudioInfo({
+        waveform: waveform,
+        duration: duration,
+      });
+    }
+    if (
+      media.type == messages.MediaType.VIDEO ||
+      media.type == messages.MediaType.PTV
+    ) {
+      const buffer = Buffer.from(media.content);
+      const duration = await esm.b.getAudioDuration(buffer).catch((err) => {
+        this.logger.warn({ error: err }, 'Failed to get video duration');
+        return undefined;
+      });
+      const isGif = request.file?.mimetype === 'image/gif';
+      media.video = new messages.VideoInfo({
+        duration: duration,
+        gifPlayback: isGif,
+        externalShareFullVideoDurationInSeconds: isGif ? 0 : undefined,
+      });
+    }
+
+    message.replyTo = getMessageIdFromSerialized(request.reply_to);
+    const tmpdir = new TmpDir(this.logger, `waha-smedia-${this.name}-`);
+    return await tmpdir.use(async (dir) => {
+      const file = path.join(dir, 'send-media.tmp');
+      // Try to write to the file
+      try {
+        await fsp.writeFile(file, Buffer.from(media.content));
+        media.contentPath = file;
+        media.content = null;
+      } catch (e) {
+        this.logger.error(`Failed to write media to temp file: ${e.message}`);
+      }
+      const response = await promisify(this.client.SendMessage)(message);
+      const data = response.toObject();
+      return this.messageResponse(jid, data);
+    });
   }
 
-  sendFile(request: MessageFileRequest) {
-    throw new AvailableInPlusVersion();
+  @Activity()
+  async sendImage(request: MessageImageRequest) {
+    return await this.sendMedia(messages.MediaType.IMAGE, request);
   }
 
-  sendVoice(request: MessageVoiceRequest) {
-    throw new AvailableInPlusVersion();
+  @Activity()
+  async sendFile(request: MessageFileRequest) {
+    return await this.sendMedia(messages.MediaType.DOCUMENT, request);
   }
 
-  sendLinkCustomPreview(
+  @Activity()
+  async sendVoice(request: MessageVoiceRequest) {
+    return await this.sendMedia(messages.MediaType.AUDIO, request);
+  }
+
+  @Activity()
+  async sendVideo(request: MessageVideoRequest) {
+    const type = request.asNote
+      ? messages.MediaType.PTV
+      : messages.MediaType.VIDEO;
+    return await this.sendMedia(type, request);
+  }
+
+  @Activity()
+  async sendLinkCustomPreview(
     request: MessageLinkCustomPreviewRequest,
   ): Promise<any> {
-    throw new AvailableInPlusVersion();
+    const jid = normalizeJid(toJID(this.ensureSuffix(request.chatId)));
+    const media = await this.fileToMedia(request.preview.image as RemoteFile);
+    const preview = new messages.LinkPreview({
+      url: request.preview.url,
+      title: request.preview.title,
+      description: request.preview.description,
+      image: media.content,
+    });
+    const message = new messages.MessageRequest({
+      jid: jid,
+      text: request.text,
+      session: this.session,
+      linkPreview: true,
+      linkPreviewHighQuality: request.linkPreviewHighQuality,
+      replyTo: getMessageIdFromSerialized(request.reply_to),
+      preview: preview,
+    });
+    const response = await promisify(this.client.SendMessage)(message);
+    const data = response.toObject();
+    return this.messageResponse(jid, data);
+  }
+
+  @Activity()
+  async sendButtonsReply(request: MessageButtonReply) {
+    throw new NotImplementedByEngineError();
+
+    // Doesn't work yet
+    const jid = normalizeJid(toJID(this.ensureSuffix(request.chatId)));
+    const message = new messages.ButtonReplyRequest({
+      jid: jid,
+      session: this.session,
+      replyTo: getMessageIdFromSerialized(request.replyTo),
+      selectedDisplayText: request.selectedDisplayText,
+      selectedButtonID: request.selectedButtonID,
+    });
+    const response = await promisify(this.client.SendButtonReply)(message);
+    const data = response.toObject();
+    return this.messageResponse(jid, data);
+  }
+
+  @Activity()
+  public async sendImageStatus(status: ImageStatus) {
+    const request = {
+      ...status,
+      chatId: Jid.BROADCAST,
+    };
+    return await this.sendMedia(messages.MediaType.IMAGE, request);
+  }
+
+  @Activity()
+  public async sendVoiceStatus(status: VoiceStatus) {
+    const request = {
+      ...status,
+      chatId: Jid.BROADCAST,
+    };
+    return await this.sendMedia(messages.MediaType.AUDIO, request);
+  }
+
+  @Activity()
+  public async sendVideoStatus(status: VideoStatus) {
+    const request = {
+      ...status,
+      chatId: Jid.BROADCAST,
+    };
+    return await this.sendMedia(messages.MediaType.VIDEO, request);
   }
 
   @Activity()
@@ -1184,7 +1468,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     const req = new messages.CreateGroupRequest({
       session: this.session,
       name: request.name,
-      participants: request.participants.map((p) => toJID(p.id)),
+      participants: request.participants.map((p) => normalizeJid(toJID(p.id))),
     });
     const response = await promisify(this.client.CreateGroup)(req);
     const data = parseJson(response);
@@ -1328,6 +1612,33 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
   }
 
   @Activity()
+  protected async setGroupPicture(
+    id: string,
+    file: BinaryFile | RemoteFile,
+  ): Promise<boolean> {
+    const media = await this.fileToMedia(file);
+    const request = new messages.SetPictureRequest({
+      session: this.session,
+      jid: id,
+      picture: media.content,
+    });
+    const response = await promisify(this.client.SetGroupPicture)(request);
+    response.toObject();
+    return true;
+  }
+
+  @Activity()
+  protected async deleteGroupPicture(id: string): Promise<boolean> {
+    const request = new messages.SetPictureRequest({
+      session: this.session,
+      jid: id,
+    });
+    const response = await promisify(this.client.SetGroupPicture)(request);
+    response.toObject();
+    return true;
+  }
+
+  @Activity()
   public async getInviteCode(id): Promise<string> {
     const req = new messages.JidRequest({
       session: this.session,
@@ -1359,7 +1670,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     participants: Array<Participant>,
     action: messages.ParticipantAction,
   ): Promise<any> {
-    const jids = participants.map((p) => toJID(p.id));
+    const jids = participants.map((p) => normalizeJid(toJID(p.id)));
     const req = new messages.UpdateParticipantsRequest({
       session: this.session,
       jid: id,
@@ -1412,7 +1723,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
 
   @Activity()
   async sendEvent(request: EventMessageRequest): Promise<WAMessage> {
-    const jid = toJID(this.ensureSuffix(request.chatId));
+    const jid = normalizeJid(toJID(this.ensureSuffix(request.chatId)));
     const event = request.event;
 
     // Create EventLocation if provided
@@ -1468,7 +1779,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
   public async setPresence(presence: WAHAPresenceStatus, chatId?: string) {
     let request: any;
     let method: any;
-    const jid = chatId ? toJID(this.ensureSuffix(chatId)) : null;
+    const jid = chatId ? normalizeJid(toJID(this.ensureSuffix(chatId))) : null;
     switch (presence) {
       case WAHAPresenceStatus.ONLINE:
         request = new messages.PresenceRequest({
@@ -1529,7 +1840,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
   }
 
   public async getPresence(chatId: string): Promise<WAHAChatPresences> {
-    const jid = toJID(chatId);
+    const jid = normalizeJid(toJID(chatId));
     await this.subscribePresence(jid);
     if (!(jid in this.presences.keys())) {
       await sleep(1000);
@@ -1540,7 +1851,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
 
   @Activity()
   async subscribePresence(chatId: string) {
-    const jid = toJID(chatId);
+    const jid = normalizeJid(toJID(chatId));
     const req = new messages.SubscribePresenceRequest({
       session: this.session,
       jid: jid,
@@ -1600,23 +1911,122 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
   /**
    * Channels methods
    */
-  public searchChannelsByView(
+  @Activity()
+  public async searchChannelsByView(
     query: ChannelSearchByView,
   ): Promise<ChannelListResult> {
-    throw new AvailableInPlusVersion();
+    const request = new messages.SearchNewslettersByViewRequest({
+      session: this.session,
+      view: query.view,
+      categories: query.categories,
+      countries: query.countries,
+      page: new messages.SearchPage({
+        limit: query.limit,
+        startCursor: query.startCursor,
+      }),
+    });
+    const response = await promisify(this.client.SearchNewslettersByView)(
+      request,
+    );
+    return this.channelsRawDataToResponse(response);
   }
 
-  public searchChannelsByText(
+  @Activity()
+  public async searchChannelsByText(
     query: ChannelSearchByText,
   ): Promise<ChannelListResult> {
-    throw new AvailableInPlusVersion();
+    const request = new messages.SearchNewslettersByTextRequest({
+      session: this.session,
+      text: query.text,
+      categories: query.categories,
+      page: new messages.SearchPage({
+        limit: query.limit,
+        startCursor: query.startCursor,
+      }),
+    });
+    const response = await promisify(this.client.SearchNewslettersByText)(
+      request,
+    );
+    return this.channelsRawDataToResponse(response);
   }
 
+  private channelsRawDataToResponse(
+    data: messages.NewsletterSearchPageResult,
+  ): ChannelListResult {
+    const channels: Channel[] = data.newsletters.newsletters.map(
+      this.toChannel.bind(this),
+    );
+    channels.forEach((channel) => {
+      delete channel.role;
+    });
+    return {
+      page: {
+        startCursor: data.page.startCursor,
+        endCursor: data.page.endCursor,
+        hasNextPage: data.page.hasNextPage,
+        hasPreviousPage: data.page.hasPreviousPage,
+      },
+      channels: channels,
+    };
+  }
+
+  @Activity()
   public async previewChannelMessages(
     inviteCode: string,
     query: PreviewChannelMessages,
   ): Promise<ChannelMessage[]> {
-    throw new AvailableInPlusVersion();
+    const downloadMedia = query.downloadMedia;
+    const request = new messages.GetNewsletterMessagesByInviteRequest({
+      session: this.session,
+      invite: inviteCode,
+      limit: query.limit,
+    });
+    const response = await promisify(this.client.GetNewsletterMessagesByInvite)(
+      request,
+    );
+    const resp = parseJson(response);
+    const promises = [];
+    if (!resp.Messages) {
+      return [];
+    }
+    for (const msg of resp.Messages) {
+      promises.push(
+        this.GowsChannelMessageToChannelMessage(
+          resp.NewsletterJID,
+          msg,
+          downloadMedia,
+        ),
+      );
+    }
+    let result = await Promise.all(promises);
+    result = result.filter(Boolean);
+    return result;
+  }
+
+  private async GowsChannelMessageToChannelMessage(
+    jid: string,
+    channelMessage: any,
+    downloadMedia: boolean,
+  ): Promise<ChannelMessage> {
+    const msg = {
+      Info: {
+        ID: channelMessage.MessageID,
+        ServerID: channelMessage.MessageServerID,
+        Chat: jid,
+        Sender: jid,
+        IsFromMe: false,
+        Timestamp: channelMessage.Timestamp,
+      },
+      Message: channelMessage.Message,
+    };
+    const message = await this.processIncomingMessage(msg, downloadMedia);
+    const reactions: any =
+      sortObjectByValues(channelMessage.ReactionCounts) || {};
+    return {
+      message: message,
+      reactions: reactions,
+      viewCount: channelMessage.ViewsCount,
+    };
   }
 
   protected toChannel(newsletter: messages.Newsletter): Channel {
@@ -1664,10 +2074,15 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
   public async channelsCreateChannel(
     request: CreateChannelRequest,
   ): Promise<Channel> {
+    let media: messages.Media;
+    if (request.picture) {
+      media = await this.fileToMedia(request.picture);
+    }
     const req = new messages.CreateNewsletterRequest({
       session: this.session,
       name: request.name,
       description: request.description,
+      picture: media?.content,
     });
     const response = await promisify(this.client.CreateNewsletter)(req);
     const newsletter = response.toObject() as messages.Newsletter;
@@ -1739,7 +2154,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
    */
   @Activity()
   public async upsertContact(chatId: string, body: ContactUpdateBody) {
-    const jid = toJID(chatId);
+    const jid = normalizeJid(toJID(chatId));
     const request = new messages.UpdateContactRequest({
       session: this.session,
       jid: jid,
@@ -1759,7 +2174,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
   }
 
   public async getContact(query: ContactQuery) {
-    const jid = toJID(query.contactId);
+    const jid = normalizeJid(toJID(query.contactId));
     const request = new messages.EntityByIdRequest({
       session: this.session,
       id: jid,
@@ -1832,7 +2247,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
   public async findLIDByPhoneNumber(
     phoneNumber: string,
   ): Promise<LidToPhoneNumber> {
-    const pn = toJID(phoneNumber);
+    const pn = normalizeJid(toJID(phoneNumber));
     const request = new messages.EntityByIdRequest({
       session: this.session,
       id: pn,
@@ -1911,7 +2326,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     }
     let jids = [];
     if (filter?.ids && filter.ids.length > 0) {
-      jids = filter.ids.map((id) => toJID(id));
+      jids = filter.ids.map((id) => normalizeJid(toJID(id)));
     }
     const request = new messages.GetChatsRequest({
       session: this.session,
@@ -1948,7 +2363,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
       jid = null;
     } else {
       jid = new messages.OptionalString({
-        value: toJID(this.ensureSuffix(chatId)),
+        value: normalizeJid(toJID(this.ensureSuffix(chatId))),
       });
     }
 
@@ -2097,7 +2512,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
   }
 
   public async getChatLabels(chatId: string): Promise<Label[]> {
-    const jid = toJID(chatId);
+    const jid = normalizeJid(toJID(chatId));
     const request = new messages.EntityByIdRequest({
       session: this.session,
       id: jid,
@@ -2109,7 +2524,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
 
   @Activity()
   public async chatsUnreadChat(chatId: string): Promise<any> {
-    const jid = toJID(this.ensureSuffix(chatId));
+    const jid = normalizeJid(toJID(this.ensureSuffix(chatId)));
     const request = new messages.ChatUnreadRequest({
       session: this.session,
       jid: jid,
@@ -2121,7 +2536,7 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
 
   @Activity()
   public async putLabelsToChat(chatId: string, labels: LabelID[]) {
-    const jid = toJID(chatId);
+    const jid = normalizeJid(toJID(chatId));
     const labelsIds = labels.map((label) => label.id);
     const currentLabels = await this.getChatLabels(jid);
     const currentLabelsIds = currentLabels.map((label) => label.id);
@@ -2189,6 +2604,16 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
       const media = await this.downloadMediaSafe(message);
       wamessage.media = media;
     }
+    if (downloadMedia && wamessage.replyTo?.hasMedia) {
+      const msg = {
+        Message: wamessage.replyTo._data,
+        Info: {
+          Chat: message.Info.Chat,
+          ID: wamessage.replyTo.id || '',
+        },
+      };
+      wamessage.replyTo.media = await this.downloadMediaSafe(msg);
+    }
     return wamessage;
   }
 
@@ -2203,7 +2628,10 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
   }
 
   protected async downloadMedia(message) {
-    const processor = new GOWSEngineMediaProcessor(this);
+    let processor: IMediaEngineProcessor<any> = new GOWSEngineMediaProcessor(
+      this,
+    );
+    processor = new LottieMediaProcessorWrapper(processor, this.logger);
     const media = await this.mediaManager.processMedia(
       processor,
       message,
@@ -2398,10 +2826,13 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
       return null;
     }
     const body = extractBody(quotedMessage);
+    const mediaContent = extractMediaContent(quotedMessage);
     return {
       id: contextInfo.stanzaID,
       participant: toCusFormat(contextInfo.participant),
       body: body,
+      hasMedia: Boolean(mediaContent),
+      media: null,
       _data: quotedMessage,
     };
   }
@@ -2527,6 +2958,63 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
   }
 }
 
+/**
+ * gRPC status codes returned by GOWS DownloadMedia that represent a definitive
+ * failure (the media cannot be fetched right now and retrying won't help). Used
+ * to tag the error as non-retriable so MediaManager doesn't re-issue the call.
+ */
+const NON_RETRIABLE_DOWNLOAD_MEDIA_CODES: Set<number> = new Set([
+  grpc.status.FAILED_PRECONDITION,
+  grpc.status.NOT_FOUND,
+  grpc.status.INVALID_ARGUMENT,
+  grpc.status.PERMISSION_DENIED,
+  grpc.status.UNIMPLEMENTED,
+]);
+
+/**
+ * Many encrypted stickers carry URL "https://a.whatsapp.net" with no path. If
+ * that string is passed to DownloadMedia, the Go client may attempt HTTP GET to
+ * that host instead of decrypting via directPath. Real CDN links use hosts
+ * such as mmg.whatsapp.net with a full path.
+ *
+ * GOWS also exposes stickerMessage.URL (uppercase); some paths expect url
+ * (lowercase). We mirror URL -> url only for real HTTP-style URLs.
+ */
+function isPlaceholderWhatsAppMediaUrl(url: unknown): boolean {
+  if (typeof url !== 'string' || url.length === 0) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url.trim());
+    if (parsed.hostname !== 'a.whatsapp.net') {
+      return false;
+    }
+    const path = parsed.pathname.replace(/\/+$/, '');
+    return path === '';
+  } catch {
+    return false;
+  }
+}
+
+function normalizeGowsStickerUrlForDownload(message: any): any {
+  const sticker = message?.Message?.stickerMessage;
+  if (!sticker) {
+    return message;
+  }
+
+  if (isPlaceholderWhatsAppMediaUrl(sticker.URL)) {
+    delete sticker.URL;
+  }
+  if (isPlaceholderWhatsAppMediaUrl(sticker.url)) {
+    delete sticker.url;
+  }
+
+  if (sticker.URL && !sticker.url) {
+    sticker.url = sticker.URL;
+  }
+  return message;
+}
+
 export class GOWSEngineMediaProcessor implements IMediaEngineProcessor<any> {
   constructor(public session: WhatsappSessionGoWSCore) {}
 
@@ -2549,6 +3037,8 @@ export class GOWSEngineMediaProcessor implements IMediaEngineProcessor<any> {
 
   async getMediaBuffer(message: any): Promise<Buffer | null> {
     const mediaDownloadTimeoutMs = 600_000; // 10 minutes
+
+    message = normalizeGowsStickerUrlForDownload(message);
 
     const data = JSON.stringify(message.Message);
     const tmpdir = new TmpDir(
@@ -2585,6 +3075,12 @@ export class GOWSEngineMediaProcessor implements IMediaEngineProcessor<any> {
       } catch (err) {
         if (err?.code === grpc.status.DEADLINE_EXCEEDED) {
           err.message = `DownloadMedia timed out after ${mediaDownloadTimeoutMs}ms for message '${message?.Info?.ID}'`;
+        } else if (NON_RETRIABLE_DOWNLOAD_MEDIA_CODES.has(err?.code)) {
+          // The media is not currently downloadable (e.g. CDN 403 after the
+          // anonymous + media-retry fallbacks, or the object is gone). Retrying
+          // the gRPC call won't help and each attempt can block on a media-retry
+          // wait, so mark it so MediaManager stops retrying.
+          err.nonRetriable = true;
         }
         throw err;
       }

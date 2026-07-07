@@ -1,4 +1,3 @@
-import { exposeFunctionIfAbsent } from '@waha/core/engines/webjs/Puppeteer';
 import { WebJSPresence } from '@waha/core/engines/webjs/types';
 import { GetChatMessagesFilter } from '@waha/structures/chats.dto';
 import { Label } from '@waha/structures/labels.dto';
@@ -9,13 +8,11 @@ import { sleep } from '@waha/utils/promiseTimeout';
 import { EventEmitter } from 'events';
 import * as lodash from 'lodash';
 import { Page } from 'puppeteer';
-import { Client, Events } from 'whatsapp-web.js';
+import { Client, Events, Message as WebjsMessage } from 'whatsapp-web.js';
 import { Message } from 'whatsapp-web.js/src/structures';
+import { Message as MessageInstance } from 'whatsapp-web.js/src/structures';
 
 import { CallErrorEvent, PAGE_CALL_ERROR_EVENT, WPage } from './WPage';
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { LoadWAHA } = require('./_WAHA.js');
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { LoadLodash } = require('./_lodash.js');
@@ -25,6 +22,72 @@ const { LoadPaginator } = require('./_Paginator.js');
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ChatFactory = require('whatsapp-web.js/src/factories/ChatFactory');
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const {
+  exposeFunctionIfAbsent,
+} = require('whatsapp-web.js/src/util/Puppeteer');
+
+export interface WebjsChannelMessage {
+  message: WebjsMessage;
+  reactions: ChannelMessageReaction[];
+  viewCount: number;
+}
+
+class ChannelMessageReaction {
+  reaction: string;
+  count: number;
+}
+
+interface _Id {
+  id: string;
+  fromMe: boolean;
+  remote: string;
+  _serialized: string;
+}
+
+/**
+ *     "parentMsgKey": {
+ *         "fromMe": false,
+ *         "remote": "111111111111111111@newsletter",
+ *         "id": "AAAAAAAAAAAAAAAAAAAA",
+ *         "_serialized": "false_111111111111111111@newsletter_AAAAAAAAAAAAAAAAAAAA"
+ *     },
+ *     "serverTimestamp": 1738536731,
+ *     "emojiCountMap": {emoji=>count}
+ */
+interface _NewsletterReaction {
+  parentMsgKey: _Id;
+  serverTimestamp: number;
+  emojiCountMap: any;
+}
+
+interface _GetNewsletterPreviewDataResponse {
+  ids: any[];
+  newsletterMetadata: any;
+  newsletterMessages: any[];
+  newsletterReactions: _NewsletterReaction[];
+  timestamp: number;
+}
+
+function extractReactionsByMessageKey(
+  newsletterReactions: _NewsletterReaction[],
+): Map<string, ChannelMessageReaction[]> {
+  const reactions = new Map();
+  for (const reaction of newsletterReactions) {
+    const key = reaction.parentMsgKey._serialized;
+    const emojiCountMap = reaction.emojiCountMap;
+    const reactionList: ChannelMessageReaction[] = [];
+    for (const emoji in emojiCountMap) {
+      reactionList.push({
+        reaction: emoji,
+        count: emojiCountMap[emoji],
+      });
+    }
+    reactions.set(key, reactionList);
+  }
+  return reactions;
+}
 
 export class WebjsClientCore extends Client {
   public events = new EventEmitter();
@@ -61,7 +124,6 @@ export class WebjsClientCore extends Client {
   async injectWaha() {
     await this.pupPage.evaluate(LoadLodash);
     await this.pupPage.evaluate(LoadPaginator);
-    await this.pupPage.evaluate(LoadWAHA);
   }
 
   /**
@@ -106,10 +168,10 @@ export class WebjsClientCore extends Client {
       }
 
       const tags = ['receipt', 'presence', 'chatstate'];
+      const WAWap = window.require('WAWap');
       // @ts-ignore
-      window.decodeStanzaBack = window.Store.SocketWap.decodeStanza;
-      // @ts-ignore
-      window.Store.SocketWap.decodeStanza = async (...args) => {
+      window.decodeStanzaBack = WAWap.decodeStanza;
+      WAWap.decodeStanza = async (...args) => {
         // @ts-ignore
         const result = await window.decodeStanzaBack(...args);
         if (tags.includes(result?.tag)) {
@@ -130,9 +192,9 @@ export class WebjsClientCore extends Client {
   async setPushName(name: string) {
     await this.ensureWahaInjected();
     await this.pupPage.evaluate(async (pushName) => {
-      return await window['WAHA'].WAWebSetPushnameConnAction.setPushname(
-        pushName,
-      );
+      return await window
+        .require('WAWebSetPushnameConnAction')
+        .setPushname(pushName);
     }, name);
     if (this.info) {
       this.info.pushname = name;
@@ -141,16 +203,9 @@ export class WebjsClientCore extends Client {
 
   async unpair() {
     await this.pupPage.evaluate(async () => {
-      if (
-        // @ts-ignore
-        window.Store &&
-        // @ts-ignore
-        window.Store.AppState &&
-        // @ts-ignore
-        typeof window.Store.AppState.logout === 'function'
-      ) {
-        // @ts-ignore
-        await window.Store.AppState.logout();
+      const Socket = window.require('WAWebSocketModel')?.Socket;
+      if (Socket && typeof Socket.logout === 'function') {
+        await Socket.logout();
       }
     });
   }
@@ -159,11 +214,9 @@ export class WebjsClientCore extends Client {
     await this.ensureWahaInjected();
     const labelId: number = (await this.pupPage.evaluate(
       async (name, color) => {
-        // @ts-ignore
-        return await window.WAHA.WAWebBizLabelEditingAction.labelAddAction(
-          name,
-          color,
-        );
+        return await window
+          .require('WAWebBizLabelEditingAction')
+          .labelAddAction(name, color);
       },
       name,
       color,
@@ -174,20 +227,16 @@ export class WebjsClientCore extends Client {
   async deleteLabel(label: Label) {
     await this.ensureWahaInjected();
     return await this.pupPage.evaluate(async (label) => {
-      // @ts-ignore
-      return await window.WAHA.WAWebBizLabelEditingAction.labelDeleteAction(
-        label.id,
-        label.name,
-        label.color,
-      );
+      return await window
+        .require('WAWebBizLabelEditingAction')
+        .labelDeleteAction(label.id, label.name, label.color);
     }, label);
   }
 
   async updateLabel(label: Label) {
     await this.ensureWahaInjected();
     return await this.pupPage.evaluate(async (label) => {
-      // @ts-ignore
-      return await window.WAHA.WAWebBizLabelEditingAction.labelEditAction(
+      return await window.require('WAWebBizLabelEditingAction').labelEditAction(
         label.id,
         label.name,
         undefined, // predefinedId
@@ -209,8 +258,26 @@ export class WebjsClientCore extends Client {
 
     const chats = await this.pupPage.evaluate(
       async (pagination, filter) => {
+        let chats = window
+          .require('WAWebCollections')
+          .Chat.getModelsArray()
+          .slice();
+
+        // Filter chats by IDs if filter is provided
+        if (filter && filter.ids && filter.ids.length > 0) {
+          chats = chats.filter((chat) =>
+            filter.ids.includes(chat.id._serialized),
+          );
+        }
+
         // @ts-ignore
-        return await window.WAHA.getChats(pagination, filter);
+        const paginator = new window.Paginator(pagination);
+        chats = paginator.apply(chats);
+        const chatPromises = chats.map((chat) =>
+          // @ts-ignore
+          window.WWebJS.getChatModel(chat),
+        );
+        return await Promise.all(chatPromises);
       },
       pagination,
       filter,
@@ -222,7 +289,7 @@ export class WebjsClientCore extends Client {
   protected async ensureWahaInjected() {
     const hasWaha = await this.pupPage.evaluate(() => {
       // @ts-ignore
-      return Boolean(window.WAHA && window.WAHA.getChats);
+      return Boolean(window.Paginator);
     });
     if (!hasWaha) {
       await this.injectWaha();
@@ -240,14 +307,14 @@ export class WebjsClientCore extends Client {
       font: status.font,
     };
     const sentMsg = await this.pupPage.evaluate(async (status) => {
-      // @ts-ignore
-      await window.Store.SendStatus.sendStatusTextMsgAction(status);
-      // @ts-ignore
-      const meUser = window.Store.User.getMaybeMePnUser();
-      // @ts-ignore
-      const myStatus = window.Store.Status.getModelsArray().findLast(
-        (x) => x.id == meUser,
-      );
+      await window
+        .require('WAWebSendStatusMsgAction')
+        .sendStatusTextMsgAction(status);
+      const meUser = window.require('WAWebUserPrefsMeUser').getMaybeMePnUser();
+      const myStatus = window
+        .require('WAWebCollections')
+        .Status.getModelsArray()
+        .findLast((x) => x.id == meUser);
       if (!myStatus) {
         return undefined;
       }
@@ -300,24 +367,128 @@ export class WebjsClientCore extends Client {
 
         // @ts-ignore
         const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
-        let msgs = chat.msgs.getModelsArray().filter(msgFilter);
+        if (!chat) return [];
 
-        while (msgs.length < pagination.limit + pagination.offset) {
-          const loadedMessages =
-            // @ts-ignore
-            await window.Store.ConversationMsgs.loadEarlierMsgs(chat);
-          if (!loadedMessages || loadedMessages.length == 0) break;
+        let msgs = [];
 
-          msgs = [...loadedMessages.filter(msgFilter), ...msgs];
-          msgs = msgs.sort((a, b) => b.t - a.t);
+        // Try new WhatsApp API (>= 2.3000.1034162388) which replaced loadEarlierMsgs
+        // @ts-ignore
+        const WAWebDBMessageFindLocal = window.require(
+          'WAWebDBMessageFindLocal',
+        );
+        if (WAWebDBMessageFindLocal?.msgFindByDirection) {
+          const BATCH_SIZE = 20;
 
-          // Check if the earliest message is already outside the timerange filter
-          const earliest = msgs[msgs.length - 1];
-          if (earliest.t < (filter['filter.timestamp.gte'] || Infinity)) {
-            // Add only messages that pass the filter and stop loading more
-            break;
+          // Construct the initial anchor the same way wa-js does:
+          // serialize to string then reconstruct via MsgKey.fromString so the
+          // object has the exact shape msgFindByDirection expects.
+          const lastReceivedSerialized = chat.lastReceivedKey?._serialized;
+          if (!lastReceivedSerialized) return [];
+          let currentAnchorKey = window
+            .require('WAWebMsgKey')
+            .fromString(lastReceivedSerialized);
+
+          // msgFindByDirection is exclusive of the anchor; include the anchor
+          // message itself (the most recent message in the chat) upfront
+          const anchorMsg = window
+            .require('WAWebCollections')
+            .Msg.get(lastReceivedSerialized);
+          if (anchorMsg) {
+            msgs.push(anchorMsg);
+          }
+
+          const neededFiltered = Number.isFinite(
+            pagination.limit + pagination.offset,
+          )
+            ? pagination.limit + pagination.offset
+            : Infinity;
+
+          // @ts-ignore
+          const toModel = (m) => {
+            if (m && typeof m.serialize === 'function') return m;
+            const serializedId = m?.id?._serialized;
+            const Msg = window.require('WAWebCollections').Msg;
+            if (serializedId) {
+              const stored = Msg.get(serializedId);
+              if (stored) return stored;
+            }
+            return new Msg.modelClass(m);
+          };
+
+          while (true) {
+            const result = await WAWebDBMessageFindLocal.msgFindByDirection({
+              anchor: currentAnchorKey,
+              count: BATCH_SIZE,
+              direction: 'before',
+            });
+
+            const batch = Array.isArray(result)
+              ? result
+              : result?.messages || [];
+            if (!batch || batch.length === 0) break;
+
+            const batchModels = batch.map(toModel);
+
+            // msgFindByDirection returns newest-first (descending) so prepend
+            // to keep the accumulated list in approximate ascending order
+            msgs = [...batchModels, ...msgs];
+
+            // Deduplicate by serialized id — the same Backbone model object can
+            // appear in multiple batches when anchors overlap
+            const seenIds = new Set();
+            msgs = msgs.filter((m) => {
+              const sid = m?.id?._serialized;
+              if (!sid || seenIds.has(sid)) return false;
+              seenIds.add(sid);
+              return true;
+            });
+
+            // Stop once we have enough messages that pass the filter
+            if (msgs.filter(msgFilter).length >= neededFiltered) break;
+
+            // Stop if the oldest message in this batch is already before the
+            // lower timestamp bound - no earlier messages can be in range
+            if (filter['filter.timestamp.gte'] != null) {
+              const batchMinT = batchModels.reduce(
+                (min, m) => Math.min(min, m.t ?? Infinity),
+                Infinity,
+              );
+              if (batchMinT < filter['filter.timestamp.gte']) break;
+            }
+
+            // No more messages available
+            if (batch.length < BATCH_SIZE) break;
+
+            // msgFindByDirection returns newest-first, so the LAST element is
+            // the oldest message in this batch — use it as the next anchor to
+            // walk further back in history without overlap
+            const oldestInBatch = batchModels[batchModels.length - 1];
+            const oldestSerialized = oldestInBatch?.id?._serialized;
+            if (!oldestSerialized) break;
+            currentAnchorKey = window
+              .require('WAWebMsgKey')
+              .fromString(oldestSerialized);
+          }
+        } else {
+          // Legacy fallback: loadEarlierMsgs loop
+          msgs = chat.msgs.getModelsArray();
+          while (msgs.length < pagination.limit + pagination.offset) {
+            const loadedMessages = await window
+              .require('WAWebChatLoadMessages')
+              .loadEarlierMsgs(chat, chat.msgs);
+            if (!loadedMessages || loadedMessages.length == 0) break;
+
+            msgs = [...loadedMessages, ...msgs];
+            msgs = msgs.sort((a, b) => b.t - a.t);
+
+            const earliest = msgs[msgs.length - 1];
+            if (earliest.t < (filter['filter.timestamp.gte'] || Infinity)) {
+              break;
+            }
           }
         }
+
+        msgs = msgs.filter(msgFilter);
 
         // Always sort newest first before applying the pagination window.
         msgs = msgs.sort((a, b) => b.t - a.t);
@@ -353,8 +524,7 @@ export class WebjsClientCore extends Client {
         pagination.offset ||= 0;
         pagination.sortBy ||= 'lid';
 
-        // @ts-ignore
-        const WAWebApiContact = window.Store.LidUtils;
+        const WAWebApiContact = window.require('WAWebApiContact');
 
         await WAWebApiContact.warmUpAllLidPnMappings();
         const lidMap = WAWebApiContact.lidPnCache['$1'];
@@ -379,8 +549,7 @@ export class WebjsClientCore extends Client {
 
   public async getLidsCount(): Promise<number> {
     const count: number = (await this.pupPage.evaluate(async () => {
-      // @ts-ignore
-      const WAWebApiContact = window.Store.LidUtils;
+      const WAWebApiContact = window.require('WAWebApiContact');
 
       await WAWebApiContact.warmUpAllLidPnMappings();
       const lidMap = WAWebApiContact.lidPnCache['$1'];
@@ -391,10 +560,8 @@ export class WebjsClientCore extends Client {
 
   public async findPNByLid(lid: string): Promise<string> {
     const pn = await this.pupPage.evaluate(async (lid) => {
-      // @ts-ignore
-      const WAWebApiContact = window.Store.LidUtils;
-      // @ts-ignore
-      const WAWebWidFactory = window.Store.WidFactory;
+      const WAWebApiContact = window.require('WAWebApiContact');
+      const WAWebWidFactory = window.require('WAWebWidFactory');
 
       const wid = WAWebWidFactory.createWid(lid);
       const result = WAWebApiContact.getPhoneNumber(wid);
@@ -405,10 +572,8 @@ export class WebjsClientCore extends Client {
 
   public async findLIDByPhoneNumber(phoneNumber: string): Promise<string> {
     const lid: string = (await this.pupPage.evaluate(async (pn) => {
-      // @ts-ignore
-      const WAWebApiContact = window.Store.LidUtils;
-      // @ts-ignore
-      const WAWebWidFactory = window.Store.WidFactory;
+      const WAWebApiContact = window.require('WAWebApiContact');
+      const WAWebWidFactory = window.require('WAWebWidFactory');
 
       const wid = WAWebWidFactory.createWid(pn);
       const result = WAWebApiContact.getCurrentLid(wid);
@@ -466,5 +631,81 @@ export class WebjsClientCore extends Client {
     await this.subscribePresence(chatId);
     await sleep(3_000);
     return await this.getCurrentPresence(chatId);
+  }
+
+  /**
+   * Channels methods
+   */
+  async channelFetchMessageByInvite(
+    inviteCode: string,
+    limit: number,
+  ): Promise<WebjsChannelMessage[]> {
+    const response: _GetNewsletterPreviewDataResponse =
+      await this.pupPage.evaluate(
+        async (code, limit) => {
+          // Overwrite the server-side message count so the preview fetches
+          // exactly `limit` messages
+          window.require(
+            'WAWebNewsletterGatingUtils',
+          ).getMaxMsgCountFromServer = () => limit;
+
+          const result = await window
+            .require('WAWebNewsletterPreviewJob')
+            .getNewsletterPreviewData(code, 'guest');
+          for (const newsletterReaction of result.newsletterReactions) {
+            // puppeter doesn't support Map,
+            // so we need to convert it to object
+            newsletterReaction.emojiCountMap = Object.fromEntries(
+              newsletterReaction.emojiCountMap,
+            );
+          }
+
+          // Fetch one more time to save in database so we can fetch media later
+          await window
+            .require('WAWebLoadNewsletterPreviewChatAction')
+            .loadNewsletterPreviewChat(code);
+          return result;
+        },
+        inviteCode,
+        limit,
+      );
+    const messageInstances = response.newsletterMessages
+      .filter((msg) => msg.type != 'revoked')
+      .map((msg) => {
+        return new MessageInstance(this, msg);
+      });
+    const reactions = extractReactionsByMessageKey(
+      response.newsletterReactions,
+    );
+
+    const messages: WebjsChannelMessage[] = messageInstances.map((msg) => {
+      return {
+        message: msg,
+        reactions: reactions.get(msg.id._serialized) || [],
+        viewCount: msg.rawData.viewCount,
+      };
+    });
+    return messages;
+  }
+
+  /**
+   * Channels Search methods
+   */
+  async searchChannelsView(params: any): Promise<any> {
+    const newsletters: any = await this.pupPage.evaluate(async (params) => {
+      return await window
+        .require('WAWebNewsletterDirectorySearchJob')
+        .getNewsletterDirectoryList(params);
+    }, params);
+    return newsletters;
+  }
+
+  async searchChannelsText(params: any): Promise<any> {
+    const newsletters: any = await this.pupPage.evaluate(async (params) => {
+      return await window
+        .require('WAWebNewsletterDirectorySearchJob')
+        .getNewsletterDirectorySearchResults(params);
+    }, params);
+    return newsletters;
   }
 }
