@@ -26,6 +26,8 @@ RUN yarn install
 WORKDIR /git
 ADD . /git
 RUN yarn install
+# Patch whatsapp-web.js's moved refreshQR API (see scripts/patch-wwebjs.js).
+RUN node scripts/patch-wwebjs.js
 RUN yarn build && find ./dist -name "*.d.ts" -delete
 
 # Rebuild sharp from source on x86-64 so it runs on pre-v2 CPUs (no SSE4.2 requirement).
