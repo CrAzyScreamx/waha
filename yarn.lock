@@ -7,7 +7,7 @@ __metadata:
 
 "@adiwajshing/baileys@github:devlikeapro/Baileys#fork-master-2026-04-28":
   version: 7.0.0-rc13
-  resolution: "@adiwajshing/baileys@https://github.com/devlikeapro/Baileys.git#commit=e45231f4a2b289ef739d5c4f74f51ca284f17069"
+  resolution: "@adiwajshing/baileys@https://github.com/devlikeapro/Baileys.git#commit=942ba050bab32436384e267ec2d8122ca434fba6"
   dependencies:
     "@cacheable/node-cache": "npm:^1.4.0"
     "@hapi/boom": "npm:^9.1.3"
@@ -32,7 +32,7 @@ __metadata:
       optional: true
     link-preview-js:
       optional: true
-  checksum: 10/b0c7dee01e1b39db8bd1e745fa77aa1e2b3a288fb88ebbe81eb2079e63dfd5d1fa8503b2d28f0eb063d1e6782fd7b97567311a33c6444a7129a86cc4c6ab2d3d
+  checksum: 10/44194fa66bd9b6f3ca1cac9aa2e0edc88a5c2537b6bf366c70f9ebcb4560888785af8c5f4f2f18851d5fd9f55f7421a319a0157c0c6ed8d72734e3c9a0946c0c
   languageName: node
   linkType: hard
 
@@ -1596,9 +1596,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@img/sharp-win32-x64@npm:0.34.5, @img/sharp-win32-x64@npm:^0.34.5":
+"@img/sharp-win32-x64@npm:0.34.5":
   version: 0.34.5
   resolution: "@img/sharp-win32-x64@npm:0.34.5"
+  conditions: os=win32 & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@img/sharp-win32-x64@npm:^0.35.3":
+  version: 0.35.3
+  resolution: "@img/sharp-win32-x64@npm:0.35.3"
   conditions: os=win32 & cpu=x64
   languageName: node
   linkType: hard
@@ -4617,15 +4624,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@wppconnect-team/wppconnect@npm:^2.2.1":
-  version: 2.2.1
-  resolution: "@wppconnect-team/wppconnect@npm:2.2.1"
+"@wppconnect-team/wppconnect@github:wppconnect-team/wppconnect#master":
+  version: 2.2.3
+  resolution: "@wppconnect-team/wppconnect@https://github.com/wppconnect-team/wppconnect.git#commit=b467df8a5e0b00bbd794b5afc40c7fb1836e70a0"
   dependencies:
-    "@img/sharp-win32-x64": "npm:^0.34.5"
-    "@wppconnect/wa-js": "npm:^4.3.0"
+    "@img/sharp-win32-x64": "npm:^0.35.3"
+    "@wppconnect/wa-js": "npm:^4.4.1"
     "@wppconnect/wa-version": "npm:^1.5.3941"
     atob: "npm:^2.1.2"
-    axios: "npm:^1.16.1"
+    axios: "npm:^1.18.1"
     boxen: "npm:^5.1.2"
     catch-exit: "npm:^2.0.0"
     chalk: "npm:~4.1.2"
@@ -4648,7 +4655,7 @@ __metadata:
     rimraf: "npm:^3.0.2"
     sanitize-filename: "npm:^1.6.4"
     sharp: "npm:0.34.5"
-    tmp: "npm:^0.2.5"
+    tmp: "npm:^0.2.7"
     tree-kill: "npm:^1.2.2"
     winston: "npm:^3.19.0"
     ws: "npm:^8.21.0"
@@ -4657,21 +4664,21 @@ __metadata:
       optional: true
     fsevents:
       optional: true
-  checksum: 10/d7940928c2874ddd0e2412b0628d2750c2457bf9b08a8840e79de24e8666f792e2e7a78c0bc16c13c4ab870e7d37683ad1b08522fb9ea7da90f695e5b21cc044
+  checksum: 10/73baacfc22b9cbc40cbec4d010591b6614e28e7e5d95be0d8cbd378d8160f886cd2683c12a0ad8bbe8e073d8bbbc5d0cb785e316320e60e6e0178c36af779a99
   languageName: node
   linkType: hard
 
-"@wppconnect/wa-js@npm:^4.3.0":
-  version: 4.3.0
-  resolution: "@wppconnect/wa-js@npm:4.3.0"
-  checksum: 10/844e63b58b62d4057ab51f114b3f9b12e13637a026b6df50c5f53801181a3800065342c0f79478db10d43dfe96a6ec60bf9d8fab7840caaf94970a774572279d
+"@wppconnect/wa-js@github:wppconnect-team/wa-js#main":
+  version: 4.4.1
+  resolution: "@wppconnect/wa-js@https://github.com/wppconnect-team/wa-js.git#commit=1f7cc7e12e2cf9246a65bb8de4348055016f374e"
+  checksum: 10/8c6a370cfa6d4ec516664b71fd1b0e4300f3dc28433925cace8df7954c6b1781913c9993d573cb39cb78d363b3edf2f4d23255655d4cdd053296ffe4534c1170
   languageName: node
   linkType: hard
 
-"@wppconnect/wa-js@npm:^4.3.1":
-  version: 4.3.1
-  resolution: "@wppconnect/wa-js@npm:4.3.1"
-  checksum: 10/5515e347fadeb9221b02ac92bd00e42f5dd31ad4236a0ca812b34060d993c5384e30e1dabf8bac85016f49075a5374ea87b7e5eb345cfdeabaabd6eb7a0b9ba2
+"@wppconnect/wa-js@npm:^4.4.1":
+  version: 4.4.1
+  resolution: "@wppconnect/wa-js@npm:4.4.1"
+  checksum: 10/8c6a370cfa6d4ec516664b71fd1b0e4300f3dc28433925cace8df7954c6b1781913c9993d573cb39cb78d363b3edf2f4d23255655d4cdd053296ffe4534c1170
   languageName: node
   linkType: hard
 
@@ -13333,10 +13340,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tmp@npm:^0.2.5":
-  version: 0.2.5
-  resolution: "tmp@npm:0.2.5"
-  checksum: 10/dd4b78b32385eab4899d3ae296007b34482b035b6d73e1201c4a9aede40860e90997a1452c65a2d21aee73d53e93cd167d741c3db4015d90e63b6d568a93d7ec
+"tmp@npm:^0.2.7":
+  version: 0.2.7
+  resolution: "tmp@npm:0.2.7"
+  checksum: 10/0a3bc90beb0c6275273c3475fb57e466eaab1c9c4a101d029ff62b18146ce136e7f75d09de34863d9f2c2a492751402508f9e028bc98eb34a1416195d4b15619
   languageName: node
   linkType: hard
 
@@ -13958,8 +13965,8 @@ __metadata:
     "@types/supertest": "npm:^2.0.8"
     "@types/user-agents": "npm:^1"
     "@types/ws": "npm:^8.5.4"
-    "@wppconnect-team/wppconnect": "npm:^2.2.1"
-    "@wppconnect/wa-js": "npm:^4.3.1"
+    "@wppconnect-team/wppconnect": "github:wppconnect-team/wppconnect#master"
+    "@wppconnect/wa-js": "github:wppconnect-team/wa-js#main"
     adm-zip: "npm:0.5.10"
     agentkeepalive: "npm:^4.5.0"
     async-lock: "npm:^1.4.1"
@@ -14141,7 +14148,7 @@ __metadata:
 
 "whatsapp-web.js@github:devlikeapro/whatsapp-web.js#fork-main-2026-06-26":
   version: 1.34.7
-  resolution: "whatsapp-web.js@https://github.com/devlikeapro/whatsapp-web.js.git#commit=c304d30169c739acedfbd770c5b206d91bb18c67"
+  resolution: "whatsapp-web.js@https://github.com/devlikeapro/whatsapp-web.js.git#commit=2daac8c8f83ddd7d92983bff8803dde970002a79"
   dependencies:
     archiver: "npm:7.0.1"
     fluent-ffmpeg: "npm:2.1.3"
@@ -14158,7 +14165,7 @@ __metadata:
       optional: true
     unzipper:
       optional: true
-  checksum: 10/f241c03ae23cb9021b40a94f1a2a74dec35ca834c8c9496faa69b6891da3be5c8fe3256793aa2449dff64db382d6891d2162dbd020426ff588613a05c55d88fc
+  checksum: 10/358d9c3e9da5f04d2db26706ba2cbf2a675efed47905d1b47319096b7739dd34e3ded8526ae5985da6b6fce9e9b931bc142a612db4af46b520bd9d55ad5ef6c9
   languageName: node
   linkType: hard
 

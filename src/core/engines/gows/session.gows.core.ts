@@ -49,6 +49,10 @@ import {
   toJID,
 } from '@waha/core/utils/jids';
 import {
+  PasskeyChallenge,
+  PasskeyConfirmationResponse,
+} from '@waha/structures/auth.dto';
+import {
   Channel,
   ChannelListResult,
   ChannelMessage,
@@ -419,6 +423,25 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
       if (data.Event == 'success') {
         return;
       }
+      if (data.Event == 'passkey-request') {
+        // WhatsApp requires a passkey (WebAuthn) to finish pairing this account.
+        const challenge = data.PasskeyRequest?.PublicKey ?? null;
+        this.logger.info('Passkey required to finish pairing');
+        this.setStatus(WAHASessionStatus.PASSKEY_REQUIRED, challenge);
+        return;
+      }
+      if (data.Event == 'passkey-confirmation') {
+        // Only the manual case reaches us - when WhatsApp allows skipping the
+        // handoff UX, whatsmeow confirms on its own and emits nothing.
+        // The operator must see the code, verify it matches the one shown on
+        // their phone, then confirm via POST .../auth/passkey/confirm.
+        const code = data.PasskeyConfirmation?.Code ?? null;
+        this.logger.info({ code: code }, 'Passkey confirmation code');
+        this.setStatus(WAHASessionStatus.PASSKEY_CONFIRMATION_REQUIRED, {
+          code: code,
+        });
+        return;
+      }
       if (data.Event != 'code') {
         this.logger.warn(data, 'Failed QR item event');
         this.status = WAHASessionStatus.FAILED;
@@ -430,6 +453,17 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
       }
       this.qr.save(qr);
       this.printQR(this.qr);
+      if (
+        this.status === WAHASessionStatus.PASSKEY_REQUIRED ||
+        this.status === WAHASessionStatus.PASSKEY_CONFIRMATION_REQUIRED
+      ) {
+        // The underlying whatsmeow QR rotation keeps emitting fresh codes in
+        // parallel while the passkey challenge is pending (it doesn't know
+        // about the passkey step). Don't let that bounce the session back to
+        // SCAN_QR_CODE mid-flow — the operator is busy signing the passkey.
+        // It'd also wipe the passkey data off the status.
+        return;
+      }
       this.status = WAHASessionStatus.SCAN_QR_CODE;
     });
     events.on(WhatsMeowEvent.PUSH_NAME_SETTING, (data) => {
@@ -847,6 +881,36 @@ export class WhatsappSessionGoWSCore extends WhatsappSession {
     const code: string = response.toObject().code;
     this.logger.info(`Your code: ${code}`);
     return { code: code };
+  }
+
+  public async sendPasskeyResponse(responseJson: string): Promise<void> {
+    const request = new messages.PasskeyResponseRequest({
+      session: this.session,
+      response_json: responseJson,
+    });
+    await promisify(this.client.SubmitPasskeyResponse)(request);
+  }
+
+  public async confirmPasskey(): Promise<void> {
+    await promisify(this.client.ConfirmPasskey)(this.session);
+  }
+
+  public getPasskeyChallenge(): PasskeyChallenge {
+    if (this.status !== WAHASessionStatus.PASSKEY_REQUIRED) {
+      throw new UnprocessableEntityException(
+        'No passkey challenge is pending for the session',
+      );
+    }
+    return this.statusData;
+  }
+
+  public getPasskeyConfirmation(): PasskeyConfirmationResponse {
+    if (this.status !== WAHASessionStatus.PASSKEY_CONFIRMATION_REQUIRED) {
+      throw new UnprocessableEntityException(
+        'No passkey confirmation is pending for the session',
+      );
+    }
+    return { code: this.statusData?.code };
   }
 
   async unpair() {

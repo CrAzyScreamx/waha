@@ -183,6 +183,7 @@ import {
   Message as MessageInstance,
   Call as CallInstance,
 } from 'whatsapp-web.js/src/structures';
+import { GetSerialized } from '@waha/core/utils/serialized';
 
 import { WAJSPresenceChatStateType, WebJSPresence } from './types';
 import { WebJSAuthFactory } from './WebJSAuthFactory';
@@ -553,7 +554,8 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
     }
     const wid = clientInfo.wid;
     return {
-      id: wid?._serialized,
+      id: GetSerialized(wid),
+      lid: GetSerialized(clientInfo.lid),
       pushName: clientInfo?.pushname,
     };
   }
@@ -760,7 +762,7 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
     }
     return {
       numberExists: true,
-      chatId: result._serialized,
+      chatId: GetSerialized(result),
     };
   }
 
@@ -1157,14 +1159,14 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
 
   protected async fetchChatSummary(chat: Chat): Promise<ChatSummary> {
     const picture = await this.getContactProfilePicture(
-      chat.id._serialized,
+      GetSerialized(chat.id),
       false,
     );
     const lastMessage = chat.lastMessage
       ? this.toWAMessage(chat.lastMessage)
       : null;
     return {
-      id: chat.id._serialized,
+      id: GetSerialized(chat.id),
       name: chat.name || null,
       picture: picture,
       lastMessage: lastMessage,
@@ -1270,7 +1272,7 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
       // @ts-ignore
       message.rawData.receipts = await message.getInfo().catch((error) => {
         this.logger.error(
-          { error: error, msg: message.id._serialized },
+          { error: error, msg: GetSerialized(message.id) },
           'Failed to get receipts',
         );
         return null;
@@ -1738,7 +1740,7 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
       role = ChannelRole.GUEST;
     }
     return {
-      id: chat.id._serialized,
+      id: GetSerialized(chat.id),
       name: chat.name,
       description: chat.description,
       invite: getChannelInviteLink(metadata.inviteCode),
@@ -2237,10 +2239,10 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
       },
     );
     const chatsArchived$ = chatArchived$.pipe(
-      filter((event: any) => this.jids.include(event?.chat?.id?._serialized)),
+      filter((event: any) => this.jids.include(GetSerialized(event?.chat?.id))),
       map((event) => {
         return {
-          id: event.chat.id._serialized,
+          id: GetSerialized(event.chat.id),
           archived: event.archived,
           timestamp: event.chat.timestamp,
         };
@@ -2327,7 +2329,7 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
 
     const source = this.getMessageSource(reaction.id.id);
     return {
-      id: reaction.id._serialized,
+      id: GetSerialized(reaction.id),
       from: normalizeJid(reaction.senderId),
       fromMe: reaction.id.fromMe,
       source: source,
@@ -2336,13 +2338,13 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
       timestamp: reaction.timestamp,
       reaction: {
         text: reaction.reaction,
-        messageId: reaction.msgId._serialized,
+        messageId: GetSerialized(reaction.msgId),
       },
     };
   }
 
   private toPollVotePayload(vote: WebjsPollVote): PollVotePayload | null {
-    const pollMessageId = vote?.parentMessage?.id?._serialized;
+    const pollMessageId = GetSerialized(vote?.parentMessage?.id);
     if (!pollMessageId) {
       return null;
     }
@@ -2422,10 +2424,10 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
   protected toWAMessage(message: Message): WAMessage {
     const replyTo = this.extractReplyTo(message);
     const source = this.getMessageSource(message.id.id);
-    const key = parseMessageIdSerialized(message.id._serialized);
+    const key = parseMessageIdSerialized(GetSerialized(message.id));
     // @ts-ignore
     return {
-      id: message.id._serialized,
+      id: GetSerialized(message.id),
       timestamp: message.timestamp,
       from: message.from,
       fromMe: message.fromMe,
@@ -2499,7 +2501,7 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
 
   protected toWAContact(contact: Contact) {
     // @ts-ignore
-    contact.id = contact.id._serialized;
+    contact.id = GetSerialized(contact.id);
     return contact;
   }
 
@@ -2577,7 +2579,7 @@ export class WEBJSEngineMediaProcessor
   }
 
   getMessageId(message: Message): string {
-    return message.id._serialized;
+    return GetSerialized(message.id);
   }
 
   getMimetype(message: Message): string {
