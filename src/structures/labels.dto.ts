@@ -1,7 +1,15 @@
 import { UnprocessableEntityException } from '@nestjs/common';
 import { ApiProperty } from '@nestjs/swagger';
 import { ChatIdProperty } from '@waha/structures/properties.dto';
-import { IsHexColor, IsNumber, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsArray,
+  IsHexColor,
+  IsNumber,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
 
 const Colors = [
   '#ff9485',
@@ -127,6 +135,15 @@ export class LabelID {
 }
 
 export class SetLabelsRequest {
+  @ApiProperty({
+    type: [LabelID],
+    example: [{ id: '1' }],
+    description:
+      'Labels to set on the chat. Replaces the current ones - send an empty array to clear all labels.',
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => LabelID)
   labels: LabelID[];
 }
 

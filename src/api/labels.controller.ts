@@ -139,7 +139,12 @@ export class LabelsController {
   @SessionApiParam
   @ChatIdApiParam
   @CheckPolicies(CanSession(Action.Send, FromParam('session')))
-  @ApiOperation({ summary: 'Save labels for the chat' })
+  @ApiOperation({
+    summary: 'Save labels for the chat',
+    description:
+      'Replaces all labels on the chat with the ones provided. Send an empty array to clear them.',
+  })
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   putChatLabels(
     @WorkingSessionParam session: WhatsappSession,
     @Param('chatId') chatId: string,

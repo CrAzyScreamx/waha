@@ -246,6 +246,49 @@ export class WebjsClientCore extends Client {
     }, label);
   }
 
+  /**
+   * Override webjs' version: it resolves chats with
+   * `Chat.filter(c => chatIds.includes(GetSerialized(c.id)))`, which silently
+   * matches nothing when the chat is only in the collection under its LID (or
+   * isn't loaded at all) - the request succeeds and no label is applied.
+   */
+  async addOrRemoveLabels(labelIds: string[], chatIds: string[]) {
+    await this.ensureWahaInjected();
+    return await this.pupPage.evaluate(
+      async (labelIds, chatIds) => {
+        const chats = [];
+        for (const chatId of chatIds) {
+          // @ts-ignore
+          const chat = await window.WWebJS.getChat(chatId, {
+            getAsModel: false,
+          });
+          if (!chat) {
+            throw `Chat '${chatId}' not found`;
+          }
+          chats.push(chat);
+        }
+
+        const actions = labelIds.map((id) => ({ id: String(id), type: 'add' }));
+        for (const chat of chats) {
+          for (const id of chat.labels || []) {
+            if (!actions.find((action) => action.id == id)) {
+              actions.push({ id: String(id), type: 'remove' });
+            }
+          }
+        }
+
+        const Label = window.require('WAWebCollections').Label;
+        if (typeof Label.addOrRemoveLabels !== 'function') {
+          // ponytail: WA Web renames these; surface the candidates instead of "not a function"
+          throw `Label.addOrRemoveLabels is gone, available: ${Object.keys(Label).join(', ')}`;
+        }
+        return await Label.addOrRemoveLabels(actions, chats);
+      },
+      labelIds,
+      chatIds,
+    );
+  }
+
   async getChats(pagination?: PaginationParams, filter?: { ids?: string[] }) {
     if (lodash.isEmpty(pagination)) {
       return await super.getChats();
