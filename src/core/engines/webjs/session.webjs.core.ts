@@ -720,11 +720,6 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
     });
   }
 
-  public async pageEval(code: string): Promise<any> {
-    // Runtime.evaluate, so WhatsApp Web's CSP doesn't apply
-    return await this.whatsapp.pupPage.evaluate(code);
-  }
-
   /**
    * Auth methods
    */

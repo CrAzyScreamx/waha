@@ -3,12 +3,10 @@ import * as v8 from 'node:v8';
 import { Readable } from 'node:stream';
 
 import {
-  Body,
   Controller,
   Get,
   Logger,
   NotFoundException,
-  Post,
   Query,
   StreamableFile,
   UseGuards,
@@ -26,7 +24,6 @@ import { WAHAValidationPipe } from '@waha/nestjs/pipes/WAHAValidationPipe';
 import {
   BrowserTraceQuery,
   CpuProfileQuery,
-  PageEvalRequest,
 } from '@waha/structures/server.debug.dto';
 import { createReadStream } from 'fs';
 import { PoliciesGuard } from '@waha/core/auth/policies.guard';
@@ -118,25 +115,6 @@ export class ServerDebugController {
       type: 'application/octet-stream',
       disposition: `attachment; filename=${fileName}`,
     });
-  }
-
-  @Post('page/eval/:session')
-  @ApiOperation({
-    summary: 'Evaluate JS inside the engine browser page',
-    description:
-      'Arbitrary code execution in the WhatsApp Web page - for debugging engine internals. Requires WAHA_DEBUG_MODE=True.',
-  })
-  @SessionApiParam
-  @UsePipes(new WAHAValidationPipe())
-  async pageEval(
-    @WorkingSessionParam session: WhatsappSession,
-    @Body() body: PageEvalRequest,
-  ) {
-    if (!this.enabled) {
-      throw new NotFoundException('WAHA_DEBUG_MODE is disabled');
-    }
-    this.logger.warn(`Evaluating code in '${session.name}' page`);
-    return { result: await session.pageEval(body.code) };
   }
 
   @Get('browser/trace/:session')
