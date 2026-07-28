@@ -54,6 +54,50 @@ function RestoreChatFindImpl() {
   };
 }
 
+/**
+ * WhatsApp Web changed sendGroupInviteMessage from 7 positional args to a
+ * single options object, so whatsapp-web.js' call (GroupChat.addParticipants,
+ * the autoSendInviteV4 branch) lands the chat in `e` and drops the rest -
+ * "Cannot read properties of undefined (reading 'id')".
+ *
+ * Accept the old positional call and forward the new shape. Gated on arity,
+ * so it skips a build that still takes positional args, and skips itself on
+ * re-injection.
+ */
+function AdaptSendGroupInviteMessage() {
+  const chatSendMessages: any = window.require('WAWebChatSendMessages');
+  if (chatSendMessages.sendGroupInviteMessage.length !== 1) {
+    return;
+  }
+  const original = chatSendMessages.sendGroupInviteMessage;
+  chatSendMessages.sendGroupInviteMessage = function (
+    chat: any,
+    gid: any,
+    name: string,
+    code: string,
+    exp: any,
+    comment: string,
+    thumb: string,
+  ) {
+    if (arguments.length === 1) {
+      return original(chat);
+    }
+    // gid stays the serialized string. GroupMetadataCollection.get() takes a
+    // Wid happily, but gid is also stored on the message as inviteGrp, and a
+    // Wid is not a valid IndexedDB key - converting it fails the send with
+    // "Failed to execute 'bound' on 'IDBKeyRange'".
+    return original({
+      chat_: chat,
+      gid: gid,
+      name: name,
+      code: code,
+      exp: exp,
+      caption: comment,
+      thumb: thumb,
+    });
+  };
+}
+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {
   exposeFunctionIfAbsent,
@@ -156,6 +200,7 @@ export class WebjsClientCore extends Client {
     await this.pupPage.evaluate(LoadLodash);
     await this.pupPage.evaluate(LoadPaginator);
     await this.pupPage.evaluate(RestoreChatFindImpl);
+    await this.pupPage.evaluate(AdaptSendGroupInviteMessage);
   }
 
   /**
