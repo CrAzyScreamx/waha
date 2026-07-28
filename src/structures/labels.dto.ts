@@ -127,6 +127,9 @@ export class Label {
 }
 
 export class LabelID {
+  // @IsString is load-bearing: the endpoint validates with whitelist: true,
+  // which strips any property without a class-validator decorator.
+  @IsString()
   @ApiProperty({
     example: '1',
     description: 'Label ID',
