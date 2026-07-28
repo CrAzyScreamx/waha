@@ -15,6 +15,18 @@ export class CpuProfileQuery {
   seconds: number = 30;
 }
 
+export class PageEvalRequest {
+  @IsString()
+  @ApiProperty({
+    description:
+      'JS expression evaluated in the WhatsApp Web page. Wrap in an async IIFE to await. Result must be JSON-serializable.',
+    example:
+      "Object.keys(window.require('WAWebBizLabelEditingAction')).join(', ')",
+    required: true,
+  })
+  code: string;
+}
+
 export class BrowserTraceQuery {
   @Type(() => Number)
   @IsNumber()

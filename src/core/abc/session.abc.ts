@@ -480,6 +480,10 @@ export abstract class WhatsappSession {
     throw new NotImplementedByEngineError();
   }
 
+  public pageEval(code: string): Promise<any> {
+    throw new NotImplementedByEngineError();
+  }
+
   /**
    * Auth methods
    */
