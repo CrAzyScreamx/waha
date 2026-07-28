@@ -24,6 +24,36 @@ const { LoadPaginator } = require('./_Paginator.js');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ChatFactory = require('whatsapp-web.js/src/factories/ChatFactory');
 
+/**
+ * WhatsApp Web dropped `findImpl` from the Chat collection - chat lookup now
+ * has to go through the LID-aware findOrCreateLatestChat. `Collection.find`
+ * still exists and still calls `this.findImpl`, so every `Chat.find(...)` in
+ * whatsapp-web.js (~18 call sites) throws "this.findImpl is not a function".
+ *
+ * Put findImpl back, delegating to the resolver WhatsApp itself moved to.
+ * No-op once WhatsApp ships a build that has it again.
+ */
+function RestoreChatFindImpl() {
+  const Chat: any = window.require('WAWebCollections').Chat;
+  if (typeof Chat.findImpl === 'function') {
+    return;
+  }
+  // Mirrors Contact.findImpl: resolve to attributes, not a model - `find`
+  // delegates to _query(FIND, ...), which builds/merges the model itself.
+  Chat.findImpl = async (wid: any) => {
+    const existing = Chat.get(wid);
+    if (existing) {
+      return { id: existing.id };
+    }
+    const result = await window
+      .require('WAWebFindChatAction')
+      .findOrCreateLatestChat(wid);
+    // findOrCreateLatestChat resolves a @c.us wid to the @lid chat it's
+    // stored under, so the id coming back may not be the one asked for.
+    return { id: result?.chat?.id ?? wid };
+  };
+}
+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {
   exposeFunctionIfAbsent,
@@ -125,6 +155,7 @@ export class WebjsClientCore extends Client {
   async injectWaha() {
     await this.pupPage.evaluate(LoadLodash);
     await this.pupPage.evaluate(LoadPaginator);
+    await this.pupPage.evaluate(RestoreChatFindImpl);
   }
 
   /**
