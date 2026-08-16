@@ -1143,6 +1143,33 @@ getProfilePicture: {
     responseDeserialize: deserialize_messages_Empty,
   },
   //
+// Account
+//
+// Fetch the account's current reachout timelock state.
+fetchReachoutTimelock: {
+    path: '/messages.MessageService/FetchReachoutTimelock',
+    requestStream: false,
+    responseStream: false,
+    requestType: gows_pb.Session,
+    responseType: gows_pb.Json,
+    requestSerialize: serialize_messages_Session,
+    requestDeserialize: deserialize_messages_Session,
+    responseSerialize: serialize_messages_Json,
+    responseDeserialize: deserialize_messages_Json,
+  },
+  // Fetch the account's current new-chat message capping (per-cycle quota).
+fetchMessageCapping: {
+    path: '/messages.MessageService/FetchMessageCapping',
+    requestStream: false,
+    responseStream: false,
+    requestType: gows_pb.Session,
+    responseType: gows_pb.Json,
+    requestSerialize: serialize_messages_Session,
+    requestDeserialize: deserialize_messages_Session,
+    responseSerialize: serialize_messages_Json,
+    responseDeserialize: deserialize_messages_Json,
+  },
+  //
 // Message
 //
 generateNewMessageID: {

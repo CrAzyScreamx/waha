@@ -1,4 +1,5 @@
 import { UnprocessableEntityException } from '@nestjs/common';
+import { parseMessageCapping } from '@waha/core/abc/capping';
 import {
   getChannelInviteLink,
   getPublicUrlFromDirectPath,
@@ -129,6 +130,8 @@ import {
 import { BrowserTraceQuery } from '@waha/structures/server.debug.dto';
 import {
   MeInfo,
+  MessageCappingData,
+  ReachoutTimelockData,
   ReachoutTimelockEnforcementType,
 } from '@waha/structures/sessions.dto';
 import { EnsureSeconds } from '@waha/utils/timehelper';
@@ -149,12 +152,13 @@ import {
   WAMessageRevokedBody,
 } from '@waha/structures/webhooks.dto';
 import { PaginatorInMemory } from '@waha/utils/Paginator';
-import { sleep, waitUntil } from '@waha/utils/promiseTimeout';
+import { promiseTimeout, sleep, waitUntil } from '@waha/utils/promiseTimeout';
 import { SingleDelayedJobRunner } from '@waha/utils/SingleDelayedJobRunner';
+import { SinglePeriodicJobRunner } from '@waha/utils/SinglePeriodicJobRunner';
 import { TmpDir } from '@waha/utils/tmpdir';
 import * as lodash from 'lodash';
 import * as path from 'path';
-import { ProtocolError } from 'puppeteer';
+import { Browser, ProtocolError } from 'puppeteer';
 import {
   filter,
   fromEvent,
@@ -219,6 +223,8 @@ export interface WebJSConfig {
 
 export class WhatsappSessionWebJSCore extends WhatsappSession {
   private START_ATTEMPT_DELAY_SECONDS = 2;
+  // how long to wait on stop for the browser to close gracefully before force-killing it
+  private DESTROY_TIMEOUT_MS = 10_000;
 
   authFactory = new WebJSAuthFactory();
 
@@ -227,6 +233,7 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
 
   private startDelayedJob: SingleDelayedJobRunner;
   private engineStateCheckDelayedJob: SingleDelayedJobRunner;
+  private whatsNewModalJob: SinglePeriodicJobRunner;
   private shouldRestart: boolean;
   private lastQRDate: Date = null;
   private static readonly REACTION_MAX_AGE_MS = 2 * 24 * 60 * 60 * 1000;
@@ -250,6 +257,13 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
       'engine-state-check',
       2 * SECOND,
       this.logger,
+    );
+    // Hide the "What's New" modal that blocks app init after QR login
+    this.whatsNewModalJob = new SinglePeriodicJobRunner(
+      'hide-whats-new-modal',
+      SECOND,
+      this.logger,
+      false,
     );
   }
 
@@ -313,7 +327,11 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
     const clientOptions = this.getClientOptions();
     clientOptions.authStrategy = authStrategy;
     this.addProxyConfig(clientOptions);
-    return new WebjsClientCore(clientOptions, this.getWebjsTagsFlag());
+    return new WebjsClientCore(
+      clientOptions,
+      this.getWebjsTagsFlag(),
+      this.logger,
+    );
   }
 
   protected getWebjsTagsFlag() {
@@ -431,6 +449,8 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
             console.log(`url is ${location.href}`),
           );
         }
+
+        this.startWhatsNewModalJob();
       })
       .catch((error) => {
         this.logger.error(error);
@@ -464,11 +484,11 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
   async stop() {
     this.cleanupPresenceTimeout();
     this.shouldRestart = false;
+    this.startDelayedJob.cancel();
+    await this.end();
     this.status = WAHASessionStatus.STOPPED;
     this.stopEvents();
-    this.startDelayedJob.cancel();
     this.mediaManager.close();
-    await this.end();
   }
 
   protected failed() {
@@ -510,6 +530,7 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
     this.cleanupPresenceTimeout();
     this.presence = null;
     this.engineStateCheckDelayedJob.cancel();
+    this.whatsNewModalJob.stop();
     this.whatsapp?.removeAllListeners();
     this.whatsapp?.pupBrowser?.removeAllListeners();
     this.whatsapp?.pupPage?.removeAllListeners();
@@ -536,10 +557,14 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
     }
 
     try {
-      await this.whatsapp?.destroy();
+      await promiseTimeout(this.DESTROY_TIMEOUT_MS, this.whatsapp?.destroy());
       this.logger.debug('Successfully destroyed whatsapp client');
     } catch (error) {
       this.logger.error(error, 'Failed to destroy whatsapp client');
+      const browser = this.whatsapp?.pupBrowser;
+      if (browser) {
+        await this.kill(browser);
+      }
     }
 
     try {
@@ -550,6 +575,33 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
     } catch (error) {
       this.logger.error(error, 'Failed to destroy auth strategy');
     }
+  }
+
+  /**
+   * Force-kill the Chromium process when the graceful destroy() failed or timed out.
+   * Throws if the browser can not be proven dead - the session is not fully stopped then.
+   */
+  private async kill(browser: Browser) {
+    // shadows the Node.js global 'process' on purpose - the global one is not used here
+    const process = browser.process();
+    if (!process) {
+      // remote or attached browser - we have no process handle to kill
+      throw new Error(
+        'No browser process to kill, can not guarantee the browser is closed',
+      );
+    }
+    if (process.exitCode !== null || process.signalCode !== null) {
+      return;
+    }
+    this.logger.warn('Force killing the browser process');
+    const exited = new Promise<void>((resolve) =>
+      process.once('exit', () => resolve()),
+    );
+    process.kill('SIGKILL');
+    // the session is stopped only when the browser process is really dead - verify it, do not assume
+    await promiseTimeout(5_000, exited).catch(() => {
+      throw new Error('The browser process did not exit after SIGKILL');
+    });
   }
 
   getSessionMeInfo(): MeInfo | null {
@@ -563,6 +615,7 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
       lid: GetSerialized(clientInfo.lid),
       pushName: clientInfo?.pushname,
       reachoutTimelock: this.reachoutTimelock.value,
+      messageCapping: this.messageCapping.value,
     };
   }
 
@@ -578,27 +631,52 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
     }
   }
 
-  protected listenConnectionEvents() {
-    this.whatsapp.on(Events.REACHOUT_TIMELOCK_UPDATE, (record: any) => {
-      if (!record) {
-        // The app removes the stored record when the enforcement is lifted (or there is none)
-        const current = this.reachoutTimelock.value;
-        if (current?.isActive) {
-          this.reachoutTimelock.update({ ...current, isActive: false });
-        }
+  private startWhatsNewModalJob() {
+    // The "What's New" modal can block app init right after QR login, so the session never leaves STARTING
+    // https://github.com/devlikeapro/waha/issues/2217
+    this.whatsNewModalJob.start(async () => {
+      let hidden = false;
+      try {
+        hidden = await this.whatsapp.hideWhatsNewModal();
+      } catch (err) {
+        // The page navigates during login, evaluate() can fail - retry on the next tick
+        this.logger.debug(`Failed to hide "What's New" modal: ${err}`);
         return;
       }
-      const enforcementType =
-        record.enforcement_type ?? ReachoutTimelockEnforcementType.DEFAULT;
-      this.reachoutTimelock.update({
-        enforcementType: enforcementType as ReachoutTimelockEnforcementType,
-        // The record only exists while the enforcement is active
-        isActive: true,
-        // The app stores 'time_enforcement_ends' as unix milliseconds
-        timeEnforcementEnds: record.time_enforcement_ends
-          ? EnsureSeconds(record.time_enforcement_ends)
-          : null,
-      });
+      if (hidden) {
+        this.logger.info(`"What's New" modal has been dismissed`);
+        return;
+      }
+      // The cool-off is stored user-scoped, so keep re-checking until it holds after login
+      if (this.status === WAHASessionStatus.WORKING) {
+        this.whatsNewModalJob.stop();
+      }
+    });
+  }
+
+  protected listenConnectionEvents() {
+    this.whatsapp.on(Events.REACHOUT_TIMELOCK_UPDATE, (record: any) => {
+      this.updateReachoutTimelockFromRecord(record);
+    });
+
+    this.whatsapp.on(Events.MESSAGE_CAPPING_UPDATE, (record: any) => {
+      // Unlike the timelock, a null record means "no local data yet", not "capping lifted"
+      if (!record) {
+        return;
+      }
+      this.messageCapping.update(parseMessageCapping(record));
+    });
+
+    this.whatsapp.on(Events.READY, async () => {
+      // Ask WhatsApp for the current message capping state, the same fetch the app runs on startup
+      try {
+        const data = await this.whatsapp.fetchMessageCapping();
+        if (data) {
+          this.messageCapping.update(parseMessageCapping(data));
+        }
+      } catch (err) {
+        this.logger.warn(err, 'Failed to fetch message capping');
+      }
     });
 
     this.whatsapp.on(Events.QR_RECEIVED, async (qr) => {
@@ -834,6 +912,63 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
     return await this.whatsapp.deleteProfilePicture();
   }
 
+  @Activity()
+  public async fetchMessageCapping(): Promise<MessageCappingData> {
+    const data = await this.whatsapp.fetchMessageCapping();
+    if (!data) {
+      throw new NotImplementedByEngineError(
+        'Message capping is not available in the current WhatsApp Web version',
+      );
+    }
+    const capping = parseMessageCapping(data);
+    // Keep the tracker in sync so MeInfo and 'session.status' reflect the fetch
+    this.messageCapping.update(capping);
+    return capping;
+  }
+
+  @Activity()
+  public async fetchReachoutTimelock(): Promise<ReachoutTimelockData> {
+    const record = await this.whatsapp.fetchReachoutTimelock();
+    if (record === undefined) {
+      throw new NotImplementedByEngineError(
+        'Reachout timelock is not available in the current WhatsApp Web version',
+      );
+    }
+    return this.updateReachoutTimelockFromRecord(record);
+  }
+
+  // Applies the stored 'WAReachoutTimelockState' record (or its removal) to the tracker,
+  // so MeInfo and 'session.status' reflect it, and returns the resulting state
+  private updateReachoutTimelockFromRecord(record: any): ReachoutTimelockData {
+    if (!record) {
+      // The app removes the stored record when the enforcement is lifted (or there is none)
+      const current = this.reachoutTimelock.value;
+      if (current?.isActive) {
+        this.reachoutTimelock.update({ ...current, isActive: false });
+      }
+      return (
+        this.reachoutTimelock.value ?? {
+          enforcementType: ReachoutTimelockEnforcementType.DEFAULT,
+          isActive: false,
+          timeEnforcementEnds: null,
+        }
+      );
+    }
+    const enforcementType =
+      record.enforcement_type ?? ReachoutTimelockEnforcementType.DEFAULT;
+    const timelock: ReachoutTimelockData = {
+      enforcementType: enforcementType as ReachoutTimelockEnforcementType,
+      // The record only exists while the enforcement is active
+      isActive: true,
+      // The app stores 'time_enforcement_ends' as unix milliseconds
+      timeEnforcementEnds: record.time_enforcement_ends
+        ? EnsureSeconds(record.time_enforcement_ends)
+        : null,
+    };
+    this.reachoutTimelock.update(timelock);
+    return timelock;
+  }
+
   /**
    * Groups methods
    */
@@ -1054,6 +1189,10 @@ export class WhatsappSessionWebJSCore extends WhatsappSession {
     const extra: any = {
       type: 'buttons_response',
       kind: 'buttonsResponse',
+      // WAWebGenerateButtonsResponseMessageProto reads the top-level field; nested buttonsResponse is legacy-gated
+      // behind the "wa_web_buttons_response_prop_removal_killswitch" ABProp (default off).
+      // Keep both like the native WAWebSendButtonsMsgReplyChatAction does
+      selectedButtonId: request.selectedButtonID,
       buttonsResponse: {
         selectedButtonId: request.selectedButtonID,
         selectedDisplayText: request.selectedDisplayText,

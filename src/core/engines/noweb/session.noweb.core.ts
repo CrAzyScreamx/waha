@@ -44,6 +44,7 @@ import type {
 import { ILogger } from '@adiwajshing/baileys/lib/Utils/logger';
 import { isLidUser } from '@adiwajshing/baileys/lib/WABinary/jid-utils';
 import { UnprocessableEntityException } from '@nestjs/common';
+import { parseMessageCapping } from '@waha/core/abc/capping';
 import {
   getChannelInviteLink,
   getPublicUrlFromDirectPath,
@@ -175,6 +176,8 @@ import {
 import { WAMessage, WAMessageReaction } from '@waha/structures/responses.dto';
 import {
   MeInfo,
+  MessageCappingData,
+  ReachoutTimelockData,
   ReachoutTimelockEnforcementType,
 } from '@waha/structures/sessions.dto';
 import { EnsureSeconds } from '@waha/utils/timehelper';
@@ -196,7 +199,7 @@ import {
   WAMessageRevokedBody,
 } from '@waha/structures/webhooks.dto';
 import { LoggerBuilder } from '@waha/utils/logging';
-import { sleep, waitUntil } from '@waha/utils/promiseTimeout';
+import { promiseTimeout, sleep, waitUntil } from '@waha/utils/promiseTimeout';
 import { exclude } from '@waha/utils/reactive/ops/exclude';
 import { SingleDelayedJobRunner } from '@waha/utils/SingleDelayedJobRunner';
 import { SinglePeriodicJobRunner } from '@waha/utils/SinglePeriodicJobRunner';
@@ -278,6 +281,8 @@ export interface NowebConfig {
 export class WhatsappSessionNoWebCore extends WhatsappSession {
   private START_ATTEMPT_DELAY_SECONDS = 2;
   private AUTO_RESTART_AFTER_SECONDS = 28 * 60;
+  // how long to wait on stop for the WebSocket close handshake and store close before forcing it
+  private CLOSE_TIMEOUT_MS = 3_000;
 
   engine = WAHAEngine.NOWEB;
   protected engineConfig: NowebConfig;
@@ -562,23 +567,13 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
 
   protected listenConnectionEvents() {
     this.logger.debug(`Start listening ${BaileysEvents.CONNECTION_UPDATE}...`);
+    this.sock.ev.on('message-capping.update', (data) => {
+      this.messageCapping.update(parseMessageCapping(data));
+    });
     this.sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr, isNewLogin } = update;
       if (update.reachoutTimeLock) {
-        const timelock = update.reachoutTimeLock;
-        const enforcementType =
-          timelock.enforcementType ?? ReachoutTimelockEnforcementType.DEFAULT;
-        let timeEnforcementEnds: number | null = null;
-        if (timelock.timeEnforcementEnds) {
-          timeEnforcementEnds = EnsureSeconds(
-            timelock.timeEnforcementEnds.getTime(),
-          );
-        }
-        this.reachoutTimelock.update({
-          enforcementType: enforcementType as ReachoutTimelockEnforcementType,
-          isActive: timelock.isActive === true,
-          timeEnforcementEnds: timeEnforcementEnds,
-        });
+        this.updateReachoutTimelockFromState(update.reachoutTimeLock);
       }
       if (isNewLogin) {
         this.restartClient();
@@ -590,6 +585,15 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
         this.sock?.fetchAccountReachoutTimelock?.().catch((error) => {
           this.logger.warn(`Failed to fetch reachout timelock: ${error}`);
         });
+        // Same for the new-chat message capping - there is no push on (re)connect, only on changes
+        this.sock
+          ?.fetchNewChatMessageCap?.()
+          .then((data) => {
+            this.messageCapping.update(parseMessageCapping(data));
+          })
+          .catch((error) => {
+            this.logger.warn(`Failed to fetch message capping: ${error}`);
+          });
         // Do we need to resubscribe?
         // Ideally not, we need to explicitly call interesting
         // jids every 1 minute
@@ -667,16 +671,11 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
       });
       this.logger.info('Creds saved');
     }
+    await this.end();
+    await this.closeStores();
     this.status = WAHASessionStatus.STOPPED;
     this.stopEvents();
-
     this.mediaManager.close();
-    await this.end();
-    await this.store?.close();
-    this.authNOWEBStore?.close().catch((err) => {
-      this.logger.error('Failed to close NOWEB auth store');
-      this.logger.error(err, err.stack);
-    });
   }
 
   protected async failed() {
@@ -692,8 +691,34 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
       await sleep(1_000);
     }
 
+    this.stopEvents();
+    this.mediaManager.close();
     await this.end();
-    await this.store?.close();
+    await this.closeStores();
+  }
+
+  /**
+   * Close the data and auth stores with a time bound - close() may flush pending writes,
+   * and broken storage must not block session stop or process shutdown
+   */
+  private async closeStores() {
+    if (this.store) {
+      await promiseTimeout(this.CLOSE_TIMEOUT_MS, this.store.close()).catch(
+        (err) => {
+          this.logger.error('Failed to close NOWEB store');
+          this.logger.error(err, err.stack);
+        },
+      );
+    }
+    if (this.authNOWEBStore) {
+      await promiseTimeout(
+        this.CLOSE_TIMEOUT_MS,
+        this.authNOWEBStore.close(),
+      ).catch((err) => {
+        this.logger.error('Failed to close NOWEB auth store');
+        this.logger.error(err, err.stack);
+      });
+    }
   }
 
   private fixMessages() {
@@ -873,13 +898,41 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     this.cleanupPresenceTimeout();
     this.presence = null;
     this.autoRestartJob.stop();
+    const sock = this.sock;
     // @ts-ignore
-    this.sock?.ev?.removeAllListeners();
-    this.sock?.ws?.removeAllListeners();
+    sock?.ev?.removeAllListeners();
+    sock?.ws?.removeAllListeners();
     // wait until connection is not connecting to avoid error:
     // "WebSocket was closed before the connection was established"
-    await waitUntil(async () => !this.sock?.ws?.isConnecting, 1_000, 10_000);
-    this.sock?.end(undefined);
+    await waitUntil(async () => !sock?.ws?.isConnecting, 1_000, 10_000);
+    if (!sock) {
+      return;
+    }
+    // sock.end() waits for the WebSocket close handshake - on a dead or already closed connection
+    // it can hang forever, so bound it and destroy the raw TCP socket to let the process exit
+    const closing = sock.end(undefined);
+    try {
+      await promiseTimeout(this.CLOSE_TIMEOUT_MS, closing);
+    } catch (err) {
+      this.logger.warn(
+        `WebSocket did not close in ${this.CLOSE_TIMEOUT_MS}ms, terminating it: ${err}`,
+      );
+      this.terminate(sock);
+    }
+  }
+
+  /**
+   * Destroy the raw TCP socket behind Baileys WebSocket wrapper.
+   * ws.terminate() skips the close handshake, so it works even on half-open connections.
+   */
+  private terminate(sock: ReturnType<typeof makeWASocket>) {
+    // 'socket' is protected on Baileys WebSocketClient, reach it at runtime
+    const raw = (sock.ws as any)?.socket;
+    try {
+      raw?.terminate?.();
+    } catch (err) {
+      this.logger.warn(`Failed to terminate WebSocket: ${err}`);
+    }
   }
 
   getSessionMeInfo(): MeInfo | null {
@@ -893,6 +946,7 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
       pushName: me.name,
       lid: jidNormalizedUser(me.lid),
       reachoutTimelock: this.reachoutTimelock.value,
+      messageCapping: this.messageCapping.value,
     };
   }
 
@@ -981,6 +1035,39 @@ export class WhatsappSessionNoWebCore extends WhatsappSession {
     const me = this.getSessionMeInfo();
     await this.sock.removeProfilePicture(me.id);
     return true;
+  }
+
+  @Activity()
+  public async fetchMessageCapping(): Promise<MessageCappingData> {
+    const data = await this.sock.fetchNewChatMessageCap();
+    const capping = parseMessageCapping(data);
+    // Keep the tracker in sync so MeInfo and 'session.status' reflect the fetch
+    this.messageCapping.update(capping);
+    return capping;
+  }
+
+  @Activity()
+  public async fetchReachoutTimelock(): Promise<ReachoutTimelockData> {
+    const state = await this.sock.fetchAccountReachoutTimelock();
+    return this.updateReachoutTimelockFromState(state);
+  }
+
+  private updateReachoutTimelockFromState(timelock: any): ReachoutTimelockData {
+    const enforcementType =
+      timelock.enforcementType ?? ReachoutTimelockEnforcementType.DEFAULT;
+    let timeEnforcementEnds: number | null = null;
+    if (timelock.timeEnforcementEnds) {
+      timeEnforcementEnds = EnsureSeconds(
+        timelock.timeEnforcementEnds.getTime(),
+      );
+    }
+    const data: ReachoutTimelockData = {
+      enforcementType: enforcementType as ReachoutTimelockEnforcementType,
+      isActive: timelock.isActive === true,
+      timeEnforcementEnds: timeEnforcementEnds,
+    };
+    this.reachoutTimelock.update(data);
+    return data;
   }
 
   /**

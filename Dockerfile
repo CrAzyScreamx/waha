@@ -193,9 +193,11 @@ RUN if [ "$USE_BROWSER" = "chromium" ]; then \
 # Install Chrome
 # NOTE: Google Chrome does NOT work on the kernel-6.17 deployment host (140
 # crashes at launch, 150 detaches during navigation). Use USE_BROWSER=chromium
-# (pinned 149 above) there. This path is kept for hosts where Chrome is fine.
-# Available versions: https://www.ubuntuupdates.org/package/google_chrome/stable/main/base/google-chrome-stable
-ARG CHROME_VERSION="150.0.7871.46-1"
+# (pinned 149 above) there. This path is kept for hosts where Chrome is fine,
+# so it tracks upstream's tested version.
+# Available versions:
+# https://www.ubuntuupdates.org/package/google_chrome/stable/main/base/google-chrome-stable
+ARG CHROME_VERSION="142.0.7444.134-1"
 ARG OPUSTAGS_VERSION="1.10.1"
 RUN if [ "$USE_BROWSER" = "chrome" ]; then \
         wget --no-verbose -O /tmp/chrome.deb https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROME_VERSION}_amd64.deb \
