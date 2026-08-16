@@ -16,6 +16,11 @@ import { ServerDebugController } from '@waha/api/server.debug.controller';
 import { WebsocketGatewayCore } from '@waha/api/websocket.gateway.core';
 import { AppsModuleExports } from '@waha/apps/apps.module';
 import { ContactsSessionController } from '@waha/api/contacts.session.controller';
+import {
+  ShareLinkController,
+  SharePublicController,
+} from '@waha/api/share.controller';
+import { ShareLinkService } from '@waha/core/share/ShareLinkService';
 import { ApiKeyStrategy } from '@waha/core/auth/apiKey.strategy';
 import { IApiKeyAuth } from '@waha/core/auth/auth';
 import { ApiKeyAuthMiddleware } from '@waha/core/auth/api-key-auth.middleware';
@@ -174,6 +179,8 @@ export const CONTROLLERS = [
   AuthController,
   ApiKeysController,
   SessionsController,
+  ShareLinkController,
+  SharePublicController,
   ProfileController,
   ChattingController,
   ChatsController,
@@ -219,6 +226,7 @@ export const PROVIDERS_BASE: Provider[] = [
   CaslAbilityFactory,
   PoliciesGuard,
   SessionService,
+  ShareLinkService,
   {
     provide: IApiKeyAuth,
     useFactory: ApiKeyAuthFactory,

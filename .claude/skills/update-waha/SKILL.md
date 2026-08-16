@@ -43,12 +43,14 @@ Rule of thumb per known customization:
 |---|---|
 | `Dockerfile` — `CHROMIUM_VERSION` / `CHROMIUM_*_DEB_SHA1` | **Keep ours.** Chromium 149 pinned from snapshot.debian.org is the only browser that works on the kernel-6.17 deployment host. Never take an upstream chromium bump here. |
 | `Dockerfile` — `CHROME_VERSION` | Take upstream's; the Chrome path is unused by this fork (`USE_BROWSER=chromium`). Keep our NOTE comment. |
-| `Dockerfile` — sharp x86-64 rebuild, opustags, `patch-wwebjs.js` RUN, `init-waha` | Keep ours, re-apply on top of upstream's layer changes. |
+| `Dockerfile` — sharp x86-64 rebuild, opustags, `patch-wwebjs.js` RUN, `init-waha`, the `share/inject.js` sed into the dashboard HTML | Keep ours, re-apply on top of upstream's layer changes. |
+| `src/core/SwaggerConfiguratorCore.ts` — `'/share/'` in the Basic Auth exclude list | Keep ours. Without it every share link visitor gets a Basic Auth prompt. |
+| `src/core/app.module.core.ts` — `ShareLinkController`, `SharePublicController`, `ShareLinkService` registrations | Keep ours, merged into upstream's lists. |
 | `src/structures/groups.dto.ts`, `src/api/groups.controller.ts`, `src/core/abc/session.abc.ts`, `session.webjs.core.ts` — `AddParticipantsRequest` / `autoSendInviteV4` | Keep ours; upstream still uses `ParticipantsRequest`. |
 | `WebjsClientCore.ts` — `RestoreChatFindImpl`, `AdaptSendGroupInviteMessage`, and their `injectWaha()` calls | Keep ours; both must survive and stay wired into `injectWaha()`. |
 | `session.webjs.core.ts` — `shouldIgnoreError` (detached Frame) | Keep ours, alongside upstream's `shouldIgnoreProtocolError`. |
 | `src/structures/labels.dto.ts` + `.test.ts` | Keep ours. |
-| `waha/**` (vault), `.github/workflows/build-custom-image.yaml`, `package-lock.json`, `scripts/patch-wwebjs.js` | Fork-only files; upstream never touches them. |
+| `waha/**` (vault), `.github/workflows/build-custom-image.yaml`, `package-lock.json`, `scripts/patch-wwebjs.js`, `src/core/share/**`, `src/api/share.controller.ts`, `src/structures/share.dto.ts` | Fork-only files; upstream never touches them. |
 
 Anything **not** in that table and not obvious: do **not** guess. Show the user
 the conflicting hunks with both sides and ask how to resolve.

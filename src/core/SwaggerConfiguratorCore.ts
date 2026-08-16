@@ -194,6 +194,8 @@ export class SwaggerConfiguratorCore {
       dashboardConfig.dashboardUri,
       '/health',
       '/ping',
+      // Public pairing links - the whole point is that they need no credentials
+      '/share/',
       '/ws',
       '/webhooks/',
       '/jobs',

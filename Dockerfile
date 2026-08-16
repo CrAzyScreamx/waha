@@ -246,6 +246,11 @@ COPY package.json ./
 COPY --from=build /git/node_modules ./node_modules
 COPY --from=build /git/dist ./dist
 COPY --from=dashboard /dashboard ./dist/dashboard
+# Add the "Get a Share Link" button to the dashboard's session dialog. The
+# dashboard is an upstream prebuilt bundle, so the widget is injected instead of
+# patched in - see src/core/share/share.assets.ts.
+RUN find ./dist/dashboard -name "*.html" -exec \
+    sed -i 's#</body>#<script src="/share/inject.js" defer></script></body>#' {} +
 COPY --from=gows /go/gows/bin/gows /app/gows
 COPY .env.example ./.env.example
 COPY scripts/init-waha.js ./scripts/init-waha.js
