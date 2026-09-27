@@ -5,6 +5,7 @@ import {
   IsArray,
   IsBoolean,
   IsEnum,
+  IsNotEmpty,
   IsOptional,
   IsString,
 } from 'class-validator';
@@ -166,6 +167,7 @@ export class DescriptionRequest {
 
 export class SubjectRequest {
   @IsString()
+  @IsNotEmpty()
   subject: string;
 }
 
