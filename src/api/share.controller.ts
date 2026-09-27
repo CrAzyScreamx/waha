@@ -23,6 +23,7 @@ import {
   SHARE_INJECT_JS,
   SHARE_PAGE_HTML,
 } from '@waha/core/share/share.assets';
+import { MCP_INJECT_JS } from '@waha/apps/mcp/mcp.inject';
 import { ShareLinkService } from '@waha/core/share/ShareLinkService';
 import { SessionApiParam } from '@waha/nestjs/params/SessionApiParam';
 import { WAHASessionStatus } from '@waha/structures/enums.dto';
@@ -76,7 +77,8 @@ class SharePublicController {
   @Header('Content-Type', 'application/javascript; charset=utf-8')
   @Header('Cache-Control', 'no-store')
   script(): string {
-    return SHARE_INJECT_JS;
+    // Single injection point in the dashboard HTML (Dockerfile) - serve both widgets
+    return SHARE_INJECT_JS + '\n' + MCP_INJECT_JS;
   }
 
   @Get(':token')

@@ -9,6 +9,8 @@ export interface User {
   isAdmin: boolean;
   session?: string;
   actions?: SessionActions | null;
+  // All sessions the key can access (primary + linked), set only when linked
+  scopes?: { session: string; actions: SessionActions | null }[];
 }
 
 function AdminUser(): User {

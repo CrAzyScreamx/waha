@@ -16,6 +16,11 @@ export class CaslAbilityFactory {
     if (user.isAdmin) {
       return createMongoAbility(AdminRules());
     }
+    if (user.scopes?.length) {
+      return createMongoAbility(
+        user.scopes.flatMap((s) => SessionRules(s.session, s.actions)),
+      );
+    }
     if (user.session) {
       return createMongoAbility(
         SessionRules(user.session, user.actions ?? null),

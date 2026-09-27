@@ -14,10 +14,14 @@ export class ApiKeyAuthService {
     if (!key) {
       return null;
     }
+    const links = Object.values(key.links ?? {}).filter((l) => l.isActive);
     return {
       isAdmin: key.isAdmin,
       session: key.session,
       actions: key.actions,
+      scopes: links.length
+        ? [{ session: key.session, actions: key.actions }, ...links]
+        : undefined,
     };
   }
 }

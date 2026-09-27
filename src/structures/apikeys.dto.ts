@@ -74,6 +74,20 @@ export class ApiKeyDTO {
 
   @ApiProperty({ type: SessionActionsDTO, required: false, nullable: true })
   actions: SessionActions | null;
+
+  @ApiProperty({
+    required: false,
+    description:
+      'Extra sessions this key can access, added by MCP apps sharing the key. Read-only.',
+    example: [
+      { session: 'other', actions: { read: true }, isActive: true },
+    ],
+  })
+  links?: {
+    session: string;
+    actions: SessionActions | null;
+    isActive: boolean;
+  }[];
 }
 
 export class ScopedApiKeyRequest {

@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsDefined,
   IsOptional,
   IsString,
@@ -40,4 +41,27 @@ export class McpAppConfig {
   @IsOptional()
   @IsString()
   key?: string;
+
+  @ApiProperty({
+    example: 'key_11111111111AAAAAAAAAAAAAAAAAAAAA',
+    required: false,
+    nullable: true,
+    writeOnly: true,
+    description:
+      'On create only: the API key of an MCP app on another session. ' +
+      'This app then reuses that key (adding this session to it) instead of creating a new one. Not persisted.',
+  })
+  @IsOptional()
+  @IsString()
+  share_key?: string;
+
+  @ApiProperty({
+    required: false,
+    readOnly: true,
+    description:
+      'True when this app reuses the API key of an MCP app on another session. Read-only.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  shared?: boolean;
 }

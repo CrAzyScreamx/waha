@@ -6,6 +6,7 @@ import { SessionManager } from '@waha/core/abc/manager.abc';
 import { SessionActions } from '@waha/core/auth/casl.types';
 import {
   ApiKey,
+  ApiKeyLink,
   IApiKeyRepository,
 } from '@waha/core/storage/IApiKeyRepository';
 import { ApiKeyDTO, ApiKeyRequest } from '@waha/structures/apikeys.dto';
@@ -216,6 +217,71 @@ export class ApiKeyService {
     await this.repository.upsert({ ...existing, ...updates });
   }
 
+  /**
+   * Grant an existing app-managed key access to one more session.
+   * The link is owned by appId and removed with it.
+   */
+  async linkForApp(
+    id: string,
+    appId: string,
+    session: string,
+    actions: SessionActions | null,
+  ): Promise<ApiKeyDTO> {
+    const existing = await this.repository.getById(id);
+    if (!existing) {
+      throw new UnprocessableEntityException(`API key '${id}' not found`);
+    }
+    if (existing.isAdmin || !existing.app_id) {
+      throw new UnprocessableEntityException(
+        'Only API keys created by an MCP app can be shared',
+      );
+    }
+    const links = existing.links ?? {};
+    const sessions = [
+      existing.session,
+      ...Object.values(links).map((l) => l.session),
+    ];
+    if (sessions.includes(session)) {
+      throw new UnprocessableEntityException(
+        `API key '${id}' already has access to session '${session}'`,
+      );
+    }
+    const apikey: ApiKey = {
+      ...existing,
+      links: {
+        ...links,
+        [appId]: { session: session, actions: actions, isActive: true },
+      },
+    };
+    await this.repository.upsert(apikey);
+    return this.toDTO(apikey);
+  }
+
+  async updateLinkForApp(
+    id: string,
+    appId: string,
+    updates: Partial<Pick<ApiKeyLink, 'isActive' | 'actions'>>,
+  ): Promise<void> {
+    const existing = await this.repository.getById(id);
+    const link = existing?.links?.[appId];
+    if (!link) {
+      return;
+    }
+    await this.repository.upsert({
+      ...existing,
+      links: { ...existing.links, [appId]: { ...link, ...updates } },
+    });
+  }
+
+  async unlinkForApp(id: string, appId: string): Promise<void> {
+    const existing = await this.repository.getById(id);
+    if (!existing?.links?.[appId]) {
+      return;
+    }
+    const { [appId]: _removed, ...links } = existing.links;
+    await this.repository.upsert({ ...existing, links: links });
+  }
+
   async getById(id: string): Promise<ApiKeyDTO | null> {
     const existing = await this.repository.getById(id);
     if (!existing) {
@@ -232,6 +298,7 @@ export class ApiKeyService {
       isAdmin: apikey.isAdmin,
       session: apikey.session,
       actions: apikey.actions,
+      links: apikey.links ? Object.values(apikey.links) : undefined,
     };
   }
 }

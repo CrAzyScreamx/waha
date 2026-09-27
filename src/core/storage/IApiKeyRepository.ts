@@ -8,6 +8,14 @@ export interface ApiKey {
   session: string | null;
   actions: SessionActions | null;
   app_id?: string | null;
+  // Extra sessions this key can access, keyed by the MCP app id that added them
+  links?: Record<string, ApiKeyLink> | null;
+}
+
+export interface ApiKeyLink {
+  session: string;
+  actions: SessionActions | null;
+  isActive: boolean;
 }
 
 export interface IApiKeyRepository {

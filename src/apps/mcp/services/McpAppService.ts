@@ -22,6 +22,7 @@ export class McpAppService implements IAppService {
     }
     delete app.config.key_id;
     delete app.config.key;
+    delete app.config.shared;
   }
 
   async beforeCreated(app: App<McpAppConfig>): Promise<void> {
@@ -32,22 +33,64 @@ export class McpAppService implements IAppService {
     manager: SessionManager,
     app: App<McpAppConfig>,
   ): Promise<void> {
-    const keyDto = await new ApiKeyService(manager).createForApp(
-      {
-        isAdmin: false,
-        session: app.session,
-        isActive: true,
-        actions: app.config?.actions ?? null,
-      },
-      app.id,
-    );
-    const updatedConfig = {
-      ...(app.config ?? {}),
-      key_id: keyDto.id,
-    } as McpAppConfig;
+    // share_key is a secret input - never persist it, even when linking fails
+    const { share_key: shareKey, ...config } = app.config ?? ({} as any);
     const repo = new AppRepository(manager.store.getWAHADatabase());
-    await repo.update(app.id, { config: updatedConfig });
-    app.config = updatedConfig;
+    let updatedConfig = config as McpAppConfig;
+    try {
+      const keyDto = shareKey
+        ? await this.linkSharedKey(manager, app, shareKey)
+        : await new ApiKeyService(manager).createForApp(
+            {
+              isAdmin: false,
+              session: app.session,
+              isActive: true,
+              actions: app.config?.actions ?? null,
+            },
+            app.id,
+          );
+      updatedConfig = {
+        ...config,
+        key_id: keyDto.id,
+        ...(shareKey ? { shared: true } : {}),
+      } as McpAppConfig;
+    } finally {
+      await repo.update(app.id, { config: updatedConfig });
+      app.config = updatedConfig;
+    }
+  }
+
+  private async linkSharedKey(
+    manager: SessionManager,
+    app: App<McpAppConfig>,
+    shareKey: string,
+  ) {
+    // Holding the key value is the proof of access - a key_id alone is not enough
+    const existing = await manager.apiKeyRepository.getByKey(shareKey);
+    if (!existing) {
+      throw new UnprocessableEntityException(
+        'share_key does not match any API key',
+      );
+    }
+    return new ApiKeyService(manager).linkForApp(
+      existing.id,
+      app.id,
+      app.session,
+      app.config?.actions ?? null,
+    );
+  }
+
+  /** Keep server-managed fields from the saved app; drop the create-only input. */
+  private pinConfig(
+    savedApp: App<McpAppConfig>,
+    newApp: App<McpAppConfig>,
+  ): void {
+    const { share_key: _ignored, ...config } = newApp.config ?? ({} as any);
+    newApp.config = {
+      ...config,
+      key_id: savedApp.config?.key_id,
+      ...(savedApp.config?.shared ? { shared: true } : {}),
+    } as McpAppConfig;
   }
 
   async beforeEnabled(
@@ -58,10 +101,7 @@ export class McpAppService implements IAppService {
     await this.requireKeyExists(manager, savedApp);
     await this.syncKeyActions(manager, savedApp, newApp);
     await this.setKeyActive(manager, savedApp, true);
-    newApp.config = {
-      ...(newApp.config ?? {}),
-      key_id: savedApp.config?.key_id,
-    } as McpAppConfig;
+    this.pinConfig(savedApp, newApp);
   }
 
   async beforeDisabled(
@@ -70,10 +110,7 @@ export class McpAppService implements IAppService {
     newApp: App<McpAppConfig>,
   ): Promise<void> {
     await this.setKeyActive(manager, savedApp, false);
-    newApp.config = {
-      ...(newApp.config ?? {}),
-      key_id: savedApp.config?.key_id,
-    } as McpAppConfig;
+    this.pinConfig(savedApp, newApp);
   }
 
   async beforeUpdated(
@@ -83,10 +120,7 @@ export class McpAppService implements IAppService {
   ): Promise<void> {
     await this.requireKeyExists(manager, savedApp);
     await this.syncKeyActions(manager, savedApp, newApp);
-    newApp.config = {
-      ...(newApp.config ?? {}),
-      key_id: savedApp.config?.key_id,
-    } as McpAppConfig;
+    this.pinConfig(savedApp, newApp);
   }
 
   async beforeDeleted(
@@ -163,6 +197,12 @@ export class McpAppService implements IAppService {
     if (!keyId) {
       return;
     }
+    if (savedApp.config?.shared) {
+      await new ApiKeyService(manager).updateLinkForApp(keyId, savedApp.id, {
+        actions: newApp.config?.actions ?? null,
+      });
+      return;
+    }
     await new ApiKeyService(manager).updateForApp(keyId, {
       actions: newApp.config?.actions ?? null,
     });
@@ -177,6 +217,12 @@ export class McpAppService implements IAppService {
     if (!keyId) {
       return;
     }
+    if (app.config?.shared) {
+      await new ApiKeyService(manager).updateLinkForApp(keyId, app.id, {
+        isActive: isActive,
+      });
+      return;
+    }
     await new ApiKeyService(manager).updateForApp(keyId, {
       isActive: isActive,
     });
@@ -188,6 +234,11 @@ export class McpAppService implements IAppService {
   ): Promise<void> {
     const keyId = app.config?.key_id;
     if (!keyId) {
+      return;
+    }
+    if (app.config?.shared) {
+      // The key belongs to another app - only drop this session from it
+      await new ApiKeyService(manager).unlinkForApp(keyId, app.id);
       return;
     }
     await new ApiKeyService(manager).deleteForApp(keyId);
