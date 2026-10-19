@@ -50,7 +50,6 @@ Rule of thumb per known customization:
 | `WebjsClientCore.ts` — `RestoreChatFindImpl`, `AdaptSendGroupInviteMessage`, and their `injectWaha()` calls | Keep ours; both must survive and stay wired into `injectWaha()`. |
 | `session.webjs.core.ts` — `shouldIgnoreError` (detached Frame) | Keep ours, alongside upstream's `shouldIgnoreProtocolError`. |
 | `src/structures/labels.dto.ts` + `.test.ts` | Keep ours. |
-| `waha.config.json` — `waha.gows` | **Keep ours** (`CrAzyScreamx/gows-plus`): the fork sends `type=CUSTOM`/`isActive` so GOWS labels show up as WhatsApp "Lists". Taking upstream's `devlikeapro/gows-plus` pin silently drops that. If upstream bumps `gows.ref`, tell the user: the fork branch `fix/labels-as-lists` must be rebased onto that gows-plus tag and re-released (`<tag>-lists.N`) before pinning it. |
 | `waha/**` (vault), `.github/workflows/build-custom-image.yaml`, `package-lock.json`, `scripts/patch-wwebjs.js`, `src/core/share/**`, `src/api/share.controller.ts`, `src/structures/share.dto.ts` | Fork-only files; upstream never touches them. |
 
 Anything **not** in that table and not obvious: do **not** guess. Show the user
