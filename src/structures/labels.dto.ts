@@ -1,13 +1,16 @@
 import { UnprocessableEntityException } from '@nestjs/common';
 import { ApiProperty } from '@nestjs/swagger';
+import { TrimString } from '@waha/nestjs/validation/TrimString';
 import { ChatIdProperty } from '@waha/structures/properties.dto';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
   IsHexColor,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
+  MaxLength,
   ValidateNested,
 } from 'class-validator';
 
@@ -39,7 +42,10 @@ export class LabelBody {
     example: 'Lead',
     description: 'Label name',
   })
+  @Transform(TrimString)
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
   name: string;
 
   @ApiProperty({
@@ -122,9 +128,17 @@ export class Label {
     example: 5,
     required: false,
     description:
-      'WhatsApp list type (labels are "Lists" now): 1 Unread, 2 Groups, 3 Favorites, 4 Predefined, 5 Custom',
+      'WhatsApp list type. User labels: 5 CUSTOM, 4 PREDEFINED, 16 LEAD. ' +
+      'Built-in lists: 1 UNREAD, 2 GROUPS, 3 FAVORITES and others.',
   })
   type?: number;
+
+  @ApiProperty({
+    example: true,
+    required: false,
+    description: 'false for lists the user turned off',
+  })
+  isActive?: boolean;
 
   static toHex(color: number) {
     if (color >= Colors.length) {
@@ -132,6 +146,31 @@ export class Label {
     }
     return Colors[color];
   }
+}
+
+// LabelEditAction.ListType from the WhatsApp app state proto
+export enum LabelListType {
+  NONE = 0,
+  UNREAD = 1,
+  GROUPS = 2,
+  FAVORITES = 3,
+  PREDEFINED = 4,
+  CUSTOM = 5,
+  COMMUNITY = 6,
+  SERVER_ASSIGNED = 7,
+  DRAFTED = 8,
+  AI_HANDOFF = 9,
+  CHANNELS = 10,
+  AI_RESPONDING = 11,
+  ARCHIVED = 12,
+  LOCKED = 13,
+  INVITES = 14,
+  THIRD_PARTY = 15,
+  LEAD = 16,
+  MENTIONS_AND_REPLIES = 17,
+  REQUESTS = 18,
+  BUSINESS = 19,
+  ONE_ON_ONE = 20,
 }
 
 export class LabelID {

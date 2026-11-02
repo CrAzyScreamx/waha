@@ -13,6 +13,7 @@ export function eventToLabelDTO(labelEdit: gows.LabelEdit): Label {
     color: labelEdit.Action.color,
     colorHex: Label.toHex(labelEdit.Action.color),
     type: labelEdit.Action.type,
+    isActive: labelEdit.Action.isActive,
   } as Label;
 }
 
