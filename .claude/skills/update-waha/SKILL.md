@@ -50,7 +50,7 @@ Rule of thumb per known customization:
 | `WebjsClientCore.ts` — `RestoreChatFindImpl`, `AdaptSendGroupInviteMessage`, and their `injectWaha()` calls | Keep ours; both must survive and stay wired into `injectWaha()`. |
 | `session.webjs.core.ts` — `shouldIgnoreError` (detached Frame) | Keep ours, alongside upstream's `shouldIgnoreProtocolError`. |
 | `src/structures/labels.dto.ts` + `.test.ts` | Keep ours. |
-| `waha.config.json` — `waha.gows` | **Take upstream's** `devlikeapro/gows-plus` pin. Since 2026.10.1 (gows-plus v1.0.49) upstream sends list `type`/`isActive` itself, so the `CrAzyScreamx/gows-plus` fork was dropped. |
+| `waha.config.json` — `waha.gows` | **Keep ours** (`CrAzyScreamx/gows-plus`). Upstream's own list `type`/`isActive` support (v1.0.49+) is not enough: it still adds chats to lists by phone number, which WA Web ignores after the account's LID migration (tried in 2026.10.1, didn't work). The fork adds chats by LID, matches PN+LID on list reads/removals, and defaults new lists to CUSTOM/active. If upstream bumps `gows.ref`, tell the user: re-apply the fork commit onto that gows-plus tag on a new branch `fix/labels-as-lists-<tag>`, tag `<tag>-lists.N` (the fork's release workflow publishes the binaries), then pin it. Current: `v1.0.49-lists.1` on `fix/labels-as-lists-v1.0.49`. |
 | `waha/**` (vault), `.github/workflows/build-custom-image.yaml`, `package-lock.json`, `scripts/patch-wwebjs.js`, `src/core/share/**`, `src/api/share.controller.ts`, `src/structures/share.dto.ts` | Fork-only files; upstream never touches them. |
 
 Anything **not** in that table and not obvious: do **not** guess. Show the user
