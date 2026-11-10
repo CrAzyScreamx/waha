@@ -149,7 +149,7 @@ import {
 import { IMediaManager, MediaDownloadOptions } from '../media/IMediaManager';
 import { QR } from '../QR';
 import { DataStore } from './DataStore';
-import { fetchBuffer } from '@waha/utils/fetch';
+import { fetchBufferCached } from '@waha/utils/fetch';
 import { SessionHooks } from './session.hooks';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -1334,7 +1334,7 @@ export abstract class WhatsappSession {
    * Fetches the content from the specified URL and returns it as a Buffer.
    */
   public fetch(url: string): Promise<Buffer> {
-    return fetchBuffer(url);
+    return fetchBufferCached(url);
   }
 
   public async resolveMentionsAll(chatId: string): Promise<string[]> {
